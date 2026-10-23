@@ -33,7 +33,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--channels", type=int, default=1, help="canales del dispositivo full-duplex"
     )
-    parser.add_argument("--device", help="indice o nombre de dispositivo sounddevice")
+    parser.add_argument(
+        "--device",
+        help="indice o nombre de un dispositivo full-duplex (entrada y salida juntas)",
+    )
+    parser.add_argument(
+        "--input-device",
+        help="indice o nombre del dispositivo de entrada (con --output-device)",
+    )
+    parser.add_argument(
+        "--output-device",
+        help="indice o nombre del dispositivo de salida (con --input-device)",
+    )
     parser.add_argument(
         "--h-response", type=Path, help="archivo .npy con la respuesta compleja H(f)"
     )
@@ -47,26 +58,16 @@ def parse_args() -> argparse.Namespace:
 
 def resolve_device(value: str | None) -> Any:
     """Un indice numerico se usa como indice; cualquier otra cosa, como nombre."""
-    if value is None:
-        return None
-    if value.isdigit():
-        return int(value)
-    return value
+    from src.audio.devices import parse_device
+
+    return parse_device(value)
 
 
 def available_devices() -> list[tuple[Any, str]]:
-    """Dispositivos que pueden abrir entrada y salida al mismo tiempo."""
-    import sounddevice as sd
+    """Interfaces ofrecidas: sistema, duplex reales y parejas entrada+salida."""
+    from src.audio.devices import available_devices as _available_devices
 
-    found: list[tuple[Any, str]] = [(None, "Sistema (entrada y salida por defecto)")]
-    for index, device in enumerate(sd.query_devices()):
-        has_input = device["max_input_channels"] > 0
-        has_output = device["max_output_channels"] > 0
-        if not (has_input and has_output):
-            continue
-        kind = "duplex" if has_input and has_output else ("entrada" if has_input else "salida")
-        found.append((index, f"{index}: {device['name']} ({kind})"))
-    return found
+    return _available_devices()
 
 
 def main() -> int:
@@ -95,14 +96,21 @@ def main() -> int:
         print("--coherence requiere tambien --h-response", file=sys.stderr)
         return 2
 
+    from src.audio.devices import combine_device_arg
     from src.audio.engine import AudioEngine
     from src.ui.window import MainWindow
+
+    try:
+        device = combine_device_arg(args.device, args.input_device, args.output_device)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 2
 
     engine = AudioEngine(
         sample_rate=args.sample_rate,
         fft_size=args.fft_size,
         channels=args.channels,
-        device=resolve_device(args.device),
+        device=device,
     )
     engine.max_gain_db = args.max_gain_db
     engine.epsilon_base = args.epsilon_base
