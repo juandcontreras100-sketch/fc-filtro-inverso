@@ -10,7 +10,7 @@
 | **P0-1** | `configure()` deja el stream consistente al descartar la calibración; excepción propia `CalibrationDiscardedError`; un cambio de frecuencia de muestreo también invalida la calibración | Análisis propio | Hecho |
 | **P0-2** | El callback de audio nunca lanza: contiene fallos, sanea NaN/Inf y avisa por `status_queue` | Cursor #3 (parcial) | Hecho |
 | **P0-3** | Limitador suave (`src/dsp/limiter.py`) antes del DAC; el medidor CLIP sigue viendo la salida sin limitar | Cursor #4 | Hecho |
-| **P0-4** | Selección de dispositivo en Windows: aceptar el par entrada/salida y emparejar el ESP32 | Análisis propio | Pendiente: necesita la lista real de dispositivos de tu PC |
+| **P0-4** | Selección de dispositivo en Windows: `src/audio/devices.py` empareja entrada y salida por nombre (probado con la lista real del PC), `--input-device`/`--output-device` en `main.py`, WDM-KS fuera de la lista automática | Análisis propio | Hecho |
 | **P1-1** | Mover el código académico de la raíz a `src/dsp/numerics.py` (con sus pruebas en `tests/`), sin duplicar `epsilon_profile` ni `estimate_h_inverse` | Cursor #1 | Pendiente |
 | **P1-2** | Coherencia real en la calibración: promediar varios barridos, calcular γ² y guardar `medicion_gamma2.npy`; corregir el README | Cursor #2 | Pendiente |
 | **P1-3** | `generar_medicion_demo.py` con `--fft-size` y `--sample-rate` | Cursor #10 | Pendiente |

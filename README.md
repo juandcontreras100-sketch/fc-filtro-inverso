@@ -49,7 +49,29 @@ powershell -ExecutionPolicy Bypass -File .\crear_accesos.ps1
 - **Cascada**: historial del espectro de salida; el tiempo avanza hacia abajo.
 
 Cambiar la interfaz, el muestreo o el tamaño de FFT reinicia el stream de audio.
-La calibración se descarta si deja de ser compatible con el nuevo tamaño de FFT.
+La calibración se descarta si deja de ser compatible con el nuevo tamaño de FFT
+o con la nueva frecuencia de muestreo.
+
+### Elegir la interfaz de audio (Windows)
+
+En Windows la entrada y la salida de una misma interfaz (por ejemplo el ESP32-S3
+como tarjeta de sonido USB) aparecen como dos dispositivos separados. La lista
+«Interfaz» los ofrece ya emparejados por nombre, primero WASAPI y luego MME.
+Para ver qué detecta el programa en su equipo:
+
+```powershell
+py -m src.audio.devices
+```
+
+Desde la línea de comandos también se pueden indicar a mano:
+
+```powershell
+py main.py --input-device 9 --output-device 8
+```
+
+La salida está limitada suavemente a 0,98 de la plena escala para no recortar
+con ganancias altas del filtro; el medidor CLIP sigue avisando cuando el filtro
+pide más.
 
 ## Calibración
 

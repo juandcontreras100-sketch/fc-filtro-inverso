@@ -151,9 +151,19 @@ class ControlPanel(QtWidgets.QWidget):
 
     def set_device(self, value: Any) -> None:
         self._building = True
-        index = self.device_combo.findData(value)
+        # Comparacion en Python: findData() de Qt no es fiable con tuplas
+        # (entrada, salida). Un valor ajeno a la lista (p. ej. el dado por la
+        # linea de comandos) se anade para que el combo no muestre otra cosa.
+        index = next(
+            (i for i in range(self.device_combo.count())
+             if self.device_combo.itemData(i) == value),
+            -1,
+        )
+        if index < 0 and value is not None:
+            self.device_combo.addItem(f"Personalizado: {value}", value)
+            index = self.device_combo.count() - 1
         if index < 0:
-            index = self.device_combo.findData(None)
+            index = 0
         if index >= 0:
             self.device_combo.setCurrentIndex(index)
         self._building = False
