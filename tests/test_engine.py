@@ -1,9 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
+from src.audio import engine as engine_module
 from src.audio.engine import AudioEngine
 
 
@@ -80,8 +82,10 @@ class AudioEngineTests(unittest.TestCase):
         path = self._write_measurement(self.bins)
         self.engine.load_calibration(path)
 
-        with self.assertRaisesRegex(ValueError, "calibracion"):
-            self.engine.configure(fft_size=1024)
+        # configure() reabre el stream; en las pruebas no se debe abrir audio real.
+        with mock.patch.object(self.engine, "restart"):
+            with self.assertRaisesRegex(ValueError, "calibracion"):
+                self.engine.configure(fft_size=1024)
 
         self.assertFalse(self.engine.is_calibrated)
         self.assertEqual(self.engine.fft_size, 1024)
@@ -91,3 +95,56 @@ class AudioEngineTests(unittest.TestCase):
         before = self.engine.revision
         self.engine.recompute_inverse()
         self.assertGreater(self.engine.revision, before)
+
+    # ---- configure(): el stream debe quedar siempre consistente --------------
+    def test_discarding_the_calibration_still_restarts_the_stream(self):
+        # Regresion: antes se lanzaba el error ANTES de restart(), dejando el
+        # stream con el blocksize viejo y el ecualizador nuevo (salida muda).
+        self.engine.load_calibration(self._write_measurement(self.bins))
+
+        with mock.patch.object(self.engine, "restart") as restart:
+            with self.assertRaisesRegex(ValueError, "calibracion"):
+                self.engine.configure(fft_size=1024)
+
+        restart.assert_called_once()
+        self.assertEqual(self.engine.hop_size, 512)
+        self.assertEqual(self.engine.equalizer.fft_size, 1024)
+
+    def test_the_discard_error_is_a_dedicated_value_error(self):
+        self.engine.load_calibration(self._write_measurement(self.bins))
+
+        with mock.patch.object(self.engine, "restart"):
+            with self.assertRaises(engine_module.CalibrationDiscardedError) as caught:
+                self.engine.configure(fft_size=1024)
+
+        self.assertIsInstance(caught.exception, ValueError)
+
+    def test_changing_the_sample_rate_discards_the_calibration(self):
+        # Los bins de una medicion a 48 kHz representan otras frecuencias a 44,1 kHz.
+        self.engine.load_calibration(self._write_measurement(self.bins))
+
+        with mock.patch.object(self.engine, "restart") as restart:
+            with self.assertRaises(engine_module.CalibrationDiscardedError):
+                self.engine.configure(sample_rate=44_100.0)
+
+        restart.assert_called_once()
+        self.assertFalse(self.engine.is_calibrated)
+        self.assertEqual(self.engine.sample_rate, 44_100.0)
+        self.assertTrue(np.allclose(self.engine.equalizer.h_inverse, 1.0))
+
+    def test_reapplying_the_same_format_keeps_the_calibration(self):
+        self.engine.load_calibration(self._write_measurement(self.bins))
+
+        with mock.patch.object(self.engine, "restart") as restart:
+            self.engine.configure(sample_rate=48_000.0, fft_size=512)
+
+        restart.assert_called_once()
+        self.assertTrue(self.engine.is_calibrated)
+
+    def test_changing_the_fft_size_without_calibration_just_restarts(self):
+        with mock.patch.object(self.engine, "restart") as restart:
+            self.engine.configure(fft_size=1024)
+
+        restart.assert_called_once()
+        self.assertEqual(self.engine.bin_count, 513)
+        self.assertTrue(np.allclose(self.engine.equalizer.h_inverse, 1.0))
