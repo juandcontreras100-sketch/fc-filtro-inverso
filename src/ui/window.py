@@ -15,7 +15,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
 
-from src.audio.engine import AudioEngine
+from src.audio.engine import AudioEngine, CalibrationDiscardedError
 from src.dsp.spectrum import DB_CEILING, DB_FLOOR, gain_db, level_db, spectrum_db
 from src.ui import theme
 from src.ui.controls import ControlPanel
@@ -196,14 +196,29 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_format_changed(self, sample_rate: float, fft_size: int) -> None:
         try:
             self.engine.configure(sample_rate=sample_rate, fft_size=fft_size)
-        except ValueError as error:
-            self._set_status(str(error))
+        except CalibrationDiscardedError as error:
+            # El formato nuevo SI se aplico y el audio sigue corriendo: solo se
+            # perdio la calibracion. Hay que rehacer los ejes para el nuevo FFT.
             self.controls.set_format(self.engine.sample_rate, self.engine.fft_size)
             self.controls.set_calibration(None)
+            self._rebuild_frequency_axis()
+            self._update_mode_status()
+            self._set_status(str(error))
+            return
+        except ValueError as error:
+            # Formato invalido: el motor no cambio nada.
+            self._set_status(str(error))
+            self.controls.set_format(self.engine.sample_rate, self.engine.fft_size)
             return
         except Exception as error:  # noqa: BLE001
+            # El formato se aplico pero el stream no pudo abrirse.
             self._set_status(f"No se pudo reiniciar el audio: {error}")
             self.controls.set_format(self.engine.sample_rate, self.engine.fft_size)
+            self.controls.set_calibration(
+                self.engine.calibration_path.name if self.engine.calibration_path else None
+            )
+            self._rebuild_frequency_axis()
+            self._update_mode_status()
             return
         self._rebuild_frequency_axis()
         self._update_mode_status()
