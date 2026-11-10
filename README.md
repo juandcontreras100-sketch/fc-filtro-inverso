@@ -14,6 +14,9 @@ py -m venv .venv
 py -m pip install -r requirements.txt
 ```
 
+Como alternativa, puede instalar el proyecto editable con sus herramientas de
+prueba: `py -m pip install -e ".[test]"`.
+
 Abra la interfaz de espectros y ecualización en tiempo real:
 
 ```powershell
@@ -41,11 +44,13 @@ powershell -ExecutionPolicy Bypass -File .\crear_accesos.ps1
 - **Panel de control** (izquierda): modo *bypass* / *ecualizado*, carga de la
   medición `.npy`, ganancia máxima, estabilidad (ε), interfaz de audio,
   frecuencia de muestreo y tamaño de FFT.
-- **Medidores de nivel**: pico y RMS de entrada y salida, con indicador `CLIP`
-  cuando la salida satura.
+- **Medidores de nivel**: pico y RMS de entrada y salida. Un limitador suave
+  protege la salida; `CLIP` indica que la señal previa al limitador habría
+  alcanzado el umbral de saturación.
 - **Espectros**: entrada (naranja) y salida (verde), más la curva del filtro
   inverso aplicado (azul discontinuo). Pase el ratón por encima para leer la
-  frecuencia y los dB exactos del cursor.
+  frecuencia y los dB exactos del cursor. La salida usa dBFS y el filtro tiene
+  un eje independiente de ganancia en dB.
 - **Cascada**: historial del espectro de salida; el tiempo avanza hacia abajo.
 
 Cambiar la interfaz, el muestreo o el tamaño de FFT reinicia el stream de audio.
@@ -81,21 +86,29 @@ Para generar una respuesta medida, conecte el circuito, mantenga un volumen segu
 py calibrate_hardware.py
 ```
 
-Después inicie la interfaz con los archivos producidos:
+El calibrador reproduce cuatro barridos por defecto, promedia la respuesta y
+guarda `medicion_H.npy` y la coherencia cuadrática `medicion_gamma2.npy`. Ajuste
+el número de capturas con `--sweeps`; se requieren al menos dos. Después inicie
+la interfaz con los archivos producidos:
 
 ```powershell
 py main.py --h-response medicion_H.npy --coherence medicion_gamma2.npy
 ```
 
+Para guardar también una respuesta impulsional diagnóstica mediante
+deconvolución Farina, añada `--farina-output medicion_ir.npy`. Este archivo no
+se usa para construir el filtro inverso.
+
 También puede cargar la medición desde el botón *Cargar medicion (.npy)...* del
 panel de control, sin reiniciar el programa.
 
 Para probar la interfaz sin circuito, `generar_medicion_demo.py` sintetiza una
-medición con muescas en 1 kHz y 4 kHz:
+medición con muescas en 1 kHz y 4 kHz. Acepte el formato predeterminado o
+especifique el mismo tamaño FFT y frecuencia de muestreo que usará en la interfaz:
 
 ```powershell
-py generar_medicion_demo.py
-py main.py --h-response medicion_H.npy --coherence medicion_gamma2.npy
+py generar_medicion_demo.py --fft-size 4096 --sample-rate 96000
+py main.py --fft-size 4096 --sample-rate 96000 --h-response medicion_H.npy --coherence medicion_gamma2.npy
 ```
 
 ## Pruebas automatizadas
@@ -103,6 +116,27 @@ py main.py --h-response medicion_H.npy --coherence medicion_gamma2.npy
 ```powershell
 py -m pytest -q
 ```
+
+## Análisis numérico
+
+Ejecute el análisis de la medición demo para comparar la solución analítica con
+el descenso de gradiente y obtener condición, retardo de grupo, energía y corte:
+
+```powershell
+py analisis_numerico.py
+```
+
+Para evaluar linealidad, mida el circuito a dos amplitudes distintas y guarde
+las respuestas en carpetas separadas:
+
+```powershell
+py calibrate_hardware.py --amplitude 0.05 --output .\medicion_baja\medicion_H.npy
+py calibrate_hardware.py --amplitude 0.15 --output .\medicion_alta\medicion_H.npy
+py analisis_numerico.py --linearity-low .\medicion_baja\medicion_H.npy --linearity-high .\medicion_alta\medicion_H.npy
+```
+
+Para analizar una medición concreta, use `--h-response`, `--coherence`,
+`--sample-rate` y `--fft-size` con el mismo formato de captura.
 
 ## Estructura del proyecto
 
@@ -113,6 +147,8 @@ generar_medicion_demo.py      Medición sintética para probar la interfaz.
 crear_accesos.ps1             Genera los accesos directos del escritorio.
 src/audio/engine.py           Stream full-duplex, ecualizador y calibración.
 src/dsp/inverse_filter.py     Filtro inverso Wiener/Tikhonov y procesador WOLA.
+src/dsp/numerics.py           Métodos numéricos y métricas académicas.
+analisis_numerico.py          Comparación analítica/gradiente y linealidad.
 src/dsp/spectrum.py           Espectro, niveles y ganancia en dB.
 src/ui/window.py              Ventana principal: gráfica, panel y refresco.
 src/ui/controls.py            Panel de control.

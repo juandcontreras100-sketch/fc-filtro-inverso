@@ -1,14 +1,4 @@
-"""Limitador suave para la salida, antes del DAC.
-
-Con ganancias altas del filtro inverso la salida puede superar +/-1.0 y el
-driver la recorta de golpe (distorsion dura y fuerte en los audifonos). Este
-limitador deja pasar sin cambios todo lo que este por debajo de ``threshold`` y
-comprime con una curva tanh lo que lo supera, de modo que la salida nunca pase
-de ``ceiling``.
-
-La curva es impar, monotona, continua y con pendiente 1 en el umbral, asi que
-no introduce saltos ni invierte la forma de onda.
-"""
+"""Soft limiter for the output stage."""
 
 from __future__ import annotations
 
@@ -22,20 +12,36 @@ def soft_limit(
     samples: np.ndarray,
     threshold: float = DEFAULT_THRESHOLD,
     ceiling: float = DEFAULT_CEILING,
+    *,
+    knee: float | None = None,
 ) -> np.ndarray:
-    """Devuelve ``samples`` comprimidos suavemente para que |y| <= ``ceiling``."""
-    if not 0.0 < threshold < ceiling <= 1.0:
-        raise ValueError("se requiere 0 < threshold < ceiling <= 1")
+    """Compress peaks smoothly while preserving samples below the threshold.
+
+    ``knee`` is accepted for callers using the alternate ceiling-minus-knee
+    convention; when supplied, it sets ``threshold = ceiling - knee``.
+    """
+    if knee is not None:
+        if threshold != DEFAULT_THRESHOLD:
+            raise ValueError("use threshold or knee, not both")
+        if not np.isfinite(knee) or not 0.0 < knee < ceiling:
+            raise ValueError("knee must be in (0, ceiling)")
+        threshold = ceiling - knee
+    if not np.isfinite(threshold) or not 0.0 < threshold < ceiling <= 1.0:
+        raise ValueError("require 0 < threshold < ceiling <= 1")
 
     values = np.asarray(samples, dtype=np.float64)
+    if not np.all(np.isfinite(values)):
+        raise ValueError("samples must contain only finite values")
+
     magnitude = np.abs(values)
     over = magnitude > threshold
     if not np.any(over):
         return values
 
-    knee = ceiling - threshold
+    knee_width = ceiling - threshold
     limited = values.copy()
     limited[over] = np.sign(values[over]) * (
-        threshold + knee * np.tanh((magnitude[over] - threshold) / knee)
+        threshold
+        + knee_width * np.tanh((magnitude[over] - threshold) / knee_width)
     )
     return limited

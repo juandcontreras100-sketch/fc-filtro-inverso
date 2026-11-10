@@ -57,6 +57,15 @@ function Resolve-Python {
         return (Get-Item -LiteralPath $Candidate).FullName
     }
 
+    $venvPython = Join-Path $ProjectDir '.venv\Scripts\python.exe'
+    if (Test-Path -LiteralPath $venvPython) {
+        if (Test-Dependencies $venvPython) {
+            return (Get-Item -LiteralPath $venvPython).FullName
+        }
+        $requirements = Join-Path $ProjectDir 'requirements.txt'
+        throw ('Se encontro .venv pero faltan dependencias. Instala con: "{0}" -m pip install -r "{1}"' -f $venvPython, $requirements)
+    }
+
     # El launcher "py" apunta al interprete instalado.
     $pyCmd = Get-Command 'py.exe' -ErrorAction SilentlyContinue
     if (-not $pyCmd) { $pyCmd = Get-Command 'py' -ErrorAction SilentlyContinue }

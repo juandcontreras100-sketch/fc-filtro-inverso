@@ -12,6 +12,7 @@ completo, nunca uno a medio construir.
 
 from __future__ import annotations
 
+import os
 import queue
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ import numpy as np
 
 from src.dsp.inverse_filter import OverlapAddFFTEqualizer, estimate_h_inverse
 from src.dsp.limiter import DEFAULT_CEILING, DEFAULT_THRESHOLD, soft_limit
+from src.dsp.spectrum import CLIP_THRESHOLD
 
 # Techo y umbral del limitador de salida (fraccion de plena escala).
 LIMITER_THRESHOLD = DEFAULT_THRESHOLD
@@ -42,6 +44,7 @@ class SpectrumFrame:
 
     input_samples: np.ndarray
     output_samples: np.ndarray
+    would_clip: bool = False
 
 
 def put_latest(target: "queue.Queue[Any]", item: Any) -> None:
@@ -103,6 +106,7 @@ class AudioEngine:
 
         self._stream: Any = None
         self.equalizer = self._create_equalizer()
+        self._pending_display_input = np.zeros(self.hop_size, dtype=np.float64)
 
     # ------------------------------------------------------------------ estado
     @property
@@ -188,11 +192,31 @@ class AudioEngine:
             coherence = (
                 np.ones(bins, dtype=np.float64) if self.coherence is None else self.coherence
             )
+            frequencies = np.fft.rfftfreq(self.fft_size, 1.0 / self.sample_rate)
+            upper = min(10_000.0, 0.95 * self.sample_rate / 2.0)
+            reference_band = (frequencies >= 100.0) & (frequencies <= upper)
+            if not np.any(reference_band):
+                reference_band = np.ones(bins, dtype=bool)
+
+            # La escala absoluta de H depende del volumen de reproducción y
+            # de la ganancia del micrófono. El filtro solo debe corregir la
+            # forma, no cambiar el nivel global de la comparación A/B.
+            h_response = self.h_response
+            reference = float(np.median(np.abs(h_response[reference_band])))
+            if np.isfinite(reference) and reference > 0.0:
+                h_response = h_response / reference
+
             h_inverse = estimate_h_inverse(
-                self.h_response,
+                h_response,
                 coherence,
                 epsilon_base=self.epsilon_base,
                 max_gain_db=self.max_gain_db,
+                # Un artefacto aislado (p. ej. un pico ultrasónico de la
+                # medición) no debe regularizar toda la banda de voz. La
+                # referencia es la potencia mediana de la banda, no su pico:
+                # así una resonancia ancha no aplasta el nivel global.
+                peak_percentile=50.0,
+                reference_mask=reference_band,
             )
         # Asignacion atomica: el callback nunca ve un array a medio construir.
         self.equalizer.h_inverse = h_inverse
@@ -211,15 +235,20 @@ class AudioEngine:
         ``device`` usa ``...`` como centinela para distinguir "sin cambio" de
         "usar el dispositivo por defecto" (``None``).
         """
-        if fft_size is not None and int(fft_size) != self.fft_size:
-            new_size = int(fft_size)
-            if new_size < 4 or new_size % 2:
-                raise ValueError("fft_size debe ser un entero par mayor o igual a 4")
+        new_size = self.fft_size if fft_size is None else int(fft_size)
+        new_sample_rate = self.sample_rate if sample_rate is None else float(sample_rate)
+        if new_size < 4 or new_size % 2:
+            raise ValueError("fft_size debe ser un entero par mayor o igual a 4")
+        if not np.isfinite(new_sample_rate) or new_sample_rate <= 0.0:
+            raise ValueError("sample_rate debe ser finita y positiva")
+
+        calibration_discarded = self.h_response is not None and (
+            new_size != self.fft_size or new_sample_rate != self.sample_rate
+        )
+        if new_size != self.fft_size:
             self.fft_size = new_size
             self.equalizer = self._create_equalizer()
-
-        if sample_rate is not None:
-            self.sample_rate = float(sample_rate)
+        self.sample_rate = new_sample_rate
         if device is not ...:
             self.device = device
 
@@ -231,7 +260,6 @@ class AudioEngine:
         else:
             self.recompute_inverse()
         self.restart()
-
         if discarded:
             raise CalibrationDiscardedError(
                 "La calibracion se descarto porque no coincide con el nuevo "
@@ -253,6 +281,10 @@ class AudioEngine:
             callback=self._callback,
         )
         self._stream.start()
+        if os.environ.get("FC_DEBUG_AUDIO") == "1":
+            input_id, output_id = self._stream.device
+            print(f"[audio] entrada {input_id}: {sd.query_devices(input_id)['name']}")
+            print(f"[audio] salida  {output_id}: {sd.query_devices(output_id)['name']}")
 
     def close(self) -> None:
         """Cierra el stream si esta abierto."""
@@ -267,6 +299,8 @@ class AudioEngine:
     def restart(self) -> None:
         """Cierra y vuelve a abrir el stream con el formato vigente."""
         self.close()
+        self.equalizer.reset()
+        self._pending_display_input = np.zeros(self.hop_size, dtype=np.float64)
         self.open()
 
     # ---------------------------------------------------------------- callback
@@ -321,16 +355,26 @@ class AudioEngine:
             # No deberia ocurrir con blocksize configurado, pero evita emitir
             # muestras antiguas si el backend incumple el contrato.
             outdata.fill(0.0)
+            self.equalizer.reset()
+            self._pending_display_input.fill(0.0)
             put_latest(self.status_queue, f"bloque inesperado: {frames} muestras")
             return
 
         output_block = self.equalizer.process_block(input_block)
         if output_block.size == 0:  # preroll WOLA
+            self._pending_display_input = input_block.copy()
             outdata.fill(0.0)
             return
+        if not np.all(np.isfinite(output_block)):
+            outdata.fill(0.0)
+            self.equalizer.reset()
+            self._pending_display_input.fill(0.0)
+            put_latest(self.status_queue, "Salida NaN/Inf: bloque silenciado")
+            return
 
-        # Al DAC va la senal limitada; a la GUI va la salida *sin limitar*, para
-        # que el medidor CLIP avise cuando el filtro pide mas de la plena escala.
+        aligned_input = self._pending_display_input
+        self._pending_display_input = input_block.copy()
+        would_clip = bool(np.max(np.abs(output_block)) >= CLIP_THRESHOLD)
         playback = (
             soft_limit(output_block, LIMITER_THRESHOLD, OUTPUT_CEILING)
             if self.limiter_enabled
@@ -339,5 +383,9 @@ class AudioEngine:
         outdata[:] = playback.astype(outdata.dtype, copy=False)[:, np.newaxis]
         put_latest(
             self.display_queue,
-            SpectrumFrame(input_samples=input_block, output_samples=output_block.copy()),
+            SpectrumFrame(
+                input_samples=aligned_input,
+                output_samples=output_block.copy(),
+                would_clip=would_clip,
+            ),
         )

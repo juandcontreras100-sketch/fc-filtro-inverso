@@ -35,6 +35,9 @@ def epsilon_profile(
     coherence: np.ndarray,
     epsilon_base: float,
     k: float = 5.0,
+    *,
+    peak_percentile: float = 100.0,
+    reference_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Calcula un perfil Tikhonov positivo y dependiente de frecuencia.
 
@@ -47,6 +50,13 @@ def epsilon_profile(
         coherence: ``gamma_squared`` para cada bin. Se recorta a ``[0, 1]``.
         epsilon_base: Intensidad base de regularización relativa al pico.
         k: Penalización adicional para bandas de baja coherencia.
+        peak_percentile: Percentil de ``|H|^2`` usado como referencia. Con
+            ``100`` se usa el máximo (comportamiento histórico). Un valor
+            menor, por ejemplo ``99``, evita que un único bin espurio
+            (ultrasonido, artefacto de barrido) regule toda la banda.
+        reference_mask: Máscara booleana de los bins que pueden fijar el
+            pico de referencia. Sirve para excluir artefactos fuera de la
+            banda útil. Si no contiene ningún ``True``, se usa toda la banda.
     """
     h = _as_finite_1d("h_freq", h_freq, complex_ok=True)
     gamma_squared = _as_finite_1d("coherence", coherence, complex_ok=False)
@@ -55,9 +65,25 @@ def epsilon_profile(
 
     epsilon_base = _validate_non_negative_scalar("epsilon_base", epsilon_base)
     k = _validate_non_negative_scalar("k", k)
+    peak_percentile = float(peak_percentile)
+    if not np.isfinite(peak_percentile) or not 0.0 < peak_percentile <= 100.0:
+        raise ValueError("peak_percentile debe estar entre 0 y 100")
     gamma_squared = np.clip(gamma_squared, 0.0, 1.0)
 
-    peak_power = float(np.max(np.abs(h) ** 2))
+    power = np.abs(h) ** 2
+    reference_power = power
+    if reference_mask is not None:
+        mask = np.asarray(reference_mask, dtype=bool)
+        if mask.shape != power.shape:
+            raise ValueError("reference_mask debe tener la misma longitud que h_freq")
+        if np.any(mask):
+            reference_power = power[mask]
+
+    peak_power = (
+        float(np.max(reference_power))
+        if peak_percentile >= 100.0
+        else float(np.percentile(reference_power, peak_percentile))
+    )
     requested = epsilon_base * peak_power * (1.0 + k * (1.0 - gamma_squared))
 
     # La escala 1.0 mantiene un denominador positivo para H == 0, mientras
@@ -71,16 +97,27 @@ def estimate_h_inverse(
     coherence: np.ndarray,
     epsilon_base: float,
     max_gain_db: float,
+    *,
+    peak_percentile: float = 100.0,
+    reference_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Estima un inverso Wiener/Tikhonov con límite estricto de ganancia.
 
     La fase de la inversión se conserva. Las muescas profundas se atenúan
     mediante ``epsilon`` y, como segunda barrera de seguridad, su módulo se
-    limita a ``max_gain_db``.
+    limita a ``max_gain_db``. ``peak_percentile`` y ``reference_mask`` se
+    pasan a :func:`epsilon_profile`; juntos evitan que un artefacto aislado
+    fuera de la banda útil aplaste toda la corrección.
     """
     h = _as_finite_1d("h_freq", h_freq, complex_ok=True)
     max_gain_db = _validate_non_negative_scalar("max_gain_db", max_gain_db)
-    eps = epsilon_profile(h, coherence, epsilon_base)
+    eps = epsilon_profile(
+        h,
+        coherence,
+        epsilon_base,
+        peak_percentile=peak_percentile,
+        reference_mask=reference_mask,
+    )
 
     denominator = np.abs(h) ** 2 + eps
     h_inverse = np.conj(h) / denominator
@@ -114,7 +151,9 @@ class OverlapAddFFTEqualizer:
     fft_size: int
     hop_size: int | None = None
     _window: np.ndarray = field(init=False, repr=False)
-    _input: np.ndarray = field(init=False, repr=False)
+    _input_ring: np.ndarray = field(init=False, repr=False)
+    _frame: np.ndarray = field(init=False, repr=False)
+    _ring_write: int = field(init=False, default=0, repr=False)
     _ola: np.ndarray = field(init=False, repr=False)
     _normalizer: np.ndarray = field(init=False, repr=False)
     _discard_preroll: bool = field(init=False, default=True, repr=False)
@@ -135,7 +174,8 @@ class OverlapAddFFTEqualizer:
             raise ValueError(f"h_inverse debe tener {expected_bins} bins para fft_size={self.fft_size}")
 
         self._window = _sqrt_hann(self.fft_size)
-        self._input = np.zeros(self.fft_size - self.hop_size, dtype=np.float64)
+        self._input_ring = np.zeros(self.fft_size, dtype=np.float64)
+        self._frame = np.zeros(self.fft_size, dtype=np.float64)
         self._ola = np.zeros(self.fft_size, dtype=np.float64)
         self._normalizer = np.zeros(self.fft_size, dtype=np.float64)
 
@@ -164,9 +204,19 @@ class OverlapAddFFTEqualizer:
         samples = _as_finite_1d("block", block, complex_ok=False)
         if samples.size != self.hop_size:
             raise ValueError(f"block debe tener exactamente {self.hop_size} muestras")
-        self._input = np.concatenate((self._input, samples))
-        output = self._process_frame(self._input)
-        self._input = self._input[self.hop_size :]
+        write_end = self._ring_write + self.hop_size
+        if write_end <= self.fft_size:
+            self._input_ring[self._ring_write : write_end] = samples
+        else:
+            first_count = self.fft_size - self._ring_write
+            self._input_ring[self._ring_write :] = samples[:first_count]
+            self._input_ring[: write_end - self.fft_size] = samples[first_count:]
+        self._ring_write = write_end % self.fft_size
+
+        first_count = self.fft_size - self._ring_write
+        self._frame[:first_count] = self._input_ring[self._ring_write :]
+        self._frame[first_count:] = self._input_ring[: self._ring_write]
+        output = self._process_frame(self._frame)
         if self._discard_preroll:
             self._discard_preroll = False
             return np.empty(0, dtype=np.float64)
@@ -180,7 +230,9 @@ class OverlapAddFFTEqualizer:
 
     def reset(self) -> None:
         """Borra historial y solapamiento antes de una nueva secuencia."""
-        self._input.fill(0.0)
+        self._input_ring.fill(0.0)
+        self._frame.fill(0.0)
+        self._ring_write = 0
         self._ola.fill(0.0)
         self._normalizer.fill(0.0)
         self._discard_preroll = True

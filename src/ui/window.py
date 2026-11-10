@@ -37,6 +37,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._frequencies = np.zeros(0)
         self._input_db = np.zeros(0)
         self._output_db = np.zeros(0)
+        self._input_history = np.zeros(engine.fft_size)
+        self._output_history = np.zeros(engine.fft_size)
 
         self.setWindowTitle("Ecualizador FFT en tiempo real")
         self.resize(1_320, 880)
@@ -113,14 +115,31 @@ class MainWindow(QtWidgets.QMainWindow):
         self.output_plot.setLabel("bottom", "Frecuencia", units="Hz")
         self.output_plot.setYRange(DB_FLOOR, DB_CEILING, padding=0)
         self.output_plot.showGrid(x=True, y=True, alpha=0.2)
+        self.output_plot.showAxis("right")
+        self.output_plot.getAxis("right").setLabel(
+            "Ganancia del filtro", units="dB", color=theme.FILTER
+        )
         self.output_curve = self.output_plot.plot(
             pen=pg.mkPen(theme.OUTPUT, width=1.5), name="Salida"
         )
-        self.filter_curve = self.output_plot.plot(
-            pen=pg.mkPen(theme.FILTER, width=1.0, style=QtCore.Qt.DashLine),
-            name="Filtro inverso (dB)",
+        self.filter_view = pg.ViewBox(enableMenu=False)
+        self.output_plot.scene().addItem(self.filter_view)
+        self.output_plot.getAxis("right").linkToView(self.filter_view)
+        self.filter_view.setXLink(self.output_plot)
+        self.filter_view.setMouseEnabled(x=False, y=False)
+        self.filter_view.setYRange(-60.0, 6.0, padding=0)
+        self.output_plot.getViewBox().sigResized.connect(
+            self._update_filter_view_geometry
         )
-        self.output_plot.addLegend(offset=(12, 12), labelTextColor=theme.MUTED)
+        self.filter_curve = pg.PlotCurveItem(
+            pen=pg.mkPen(theme.FILTER, width=1.0, style=QtCore.Qt.DashLine)
+        )
+        self.filter_view.addItem(self.filter_curve)
+        output_legend = self.output_plot.addLegend(
+            offset=(12, 12), labelTextColor=theme.MUTED
+        )
+        output_legend.addItem(self.filter_curve, "Filtro inverso")
+        self._update_filter_view_geometry()
 
         self.readout = CursorReadout([self.input_plot, self.output_plot])
 
@@ -161,6 +180,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._frequencies = np.fft.rfftfreq(
             self.engine.fft_size, d=1.0 / self.engine.sample_rate
         )
+        self._input_history = np.zeros(self.engine.fft_size)
+        self._output_history = np.zeros(self.engine.fft_size)
         self.spectrogram.reconfigure(
             self.engine.bin_count,
             self.engine.nyquist,
@@ -168,11 +189,22 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.input_plot.setXRange(0.0, self.engine.nyquist, padding=0)
 
+    def _update_filter_view_geometry(self) -> None:
+        output_view = self.output_plot.getViewBox()
+        self.filter_view.setGeometry(output_view.sceneBoundingRect())
+        self.filter_view.linkedViewChanged(output_view, self.filter_view.XAxis)
+
     # ------------------------------------------------------------- acciones
     def _on_mode_changed(self, bypass: bool) -> None:
+        leaving_bypass = self.engine.bypass and not bypass
         self.engine.bypass = bypass
         self.engine.recompute_inverse()
         self._update_mode_status()
+        if leaving_bypass:
+            self.statusBar().showMessage(
+                "Ecualización activa: vigile el nivel y la realimentación acústica.",
+                8_000,
+            )
 
     def _on_gain_changed(self, db: float) -> None:
         self.engine.max_gain_db = db
@@ -288,8 +320,13 @@ class MainWindow(QtWidgets.QMainWindow):
         if latest is None:
             return
 
-        self._input_db = spectrum_db(latest.input_samples, self.engine.fft_size)
-        self._output_db = spectrum_db(latest.output_samples, self.engine.fft_size)
+        hop_size = latest.input_samples.size
+        self._input_history[:-hop_size] = self._input_history[hop_size:]
+        self._input_history[-hop_size:] = latest.input_samples
+        self._output_history[:-hop_size] = self._output_history[hop_size:]
+        self._output_history[-hop_size:] = latest.output_samples
+        self._input_db = spectrum_db(self._input_history, self.engine.fft_size)
+        self._output_db = spectrum_db(self._output_history, self.engine.fft_size)
         self.input_curve.setData(self._frequencies, self._input_db)
         self.output_curve.setData(self._frequencies, self._output_db)
         self._update_filter_curve()
@@ -298,11 +335,15 @@ class MainWindow(QtWidgets.QMainWindow):
         in_rms, in_peak = level_db(latest.input_samples)
         out_rms, out_peak = level_db(latest.output_samples)
         self.meters.set_input(in_rms, in_peak)
-        self.meters.set_output(out_rms, out_peak)
+        self.meters.set_output(out_rms, out_peak, latest.would_clip)
 
         self.readout.set_spectra(
             self._frequencies,
-            {"entrada": self._input_db, "salida": self._output_db},
+            {
+                "entrada": self._input_db,
+                "salida": self._output_db,
+                "filtro": self._filter_db,
+            },
         )
 
     def _update_filter_curve(self) -> None:
@@ -311,6 +352,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self._filter_db = gain_db(self.engine.equalizer.h_inverse)
         if self._filter_db.size == self._frequencies.size:
             self.filter_curve.setData(self._frequencies, self._filter_db)
+            lower = min(DB_FLOOR, float(np.min(self._filter_db)) - 3.0)
+            upper = max(6.0, float(np.max(self._filter_db)) + 3.0)
+            self.filter_view.setYRange(lower, upper, padding=0)
 
     def _on_mouse_moved(self, position: QtCore.QPointF) -> None:
         text = self.readout.handle_mouse(position)

@@ -50,6 +50,54 @@ class InverseFilterTests(unittest.TestCase):
         self.assertEqual(inverse[-1], 0.0)
         self.assertLessEqual(np.max(np.abs(inverse)), 10 ** (6.0 / 20.0))
 
+    def test_epsilon_profile_robust_peak_ignores_an_isolated_outlier(self):
+        h = np.ones(101, dtype=complex)
+        h[50] = 100.0
+
+        default = epsilon_profile(h, np.ones(h.size), epsilon_base=0.02)
+        robust = epsilon_profile(
+            h, np.ones(h.size), epsilon_base=0.02, peak_percentile=99.0
+        )
+
+        self.assertLess(robust[0], default[0] / 100.0)
+        self.assertAlmostEqual(robust[0], 0.02, places=6)
+
+    def test_estimate_h_inverse_robust_peak_keeps_flat_band_near_unity(self):
+        h = np.ones(101, dtype=complex)
+        h[50] = 100.0
+
+        inverse = estimate_h_inverse(
+            h, np.ones(h.size), 0.02, 12.0, peak_percentile=99.0
+        )
+
+        self.assertTrue(np.allclose(np.delete(inverse, 50), 1.0, atol=0.1))
+        self.assertLess(abs(inverse[50]), 0.011)
+
+    def test_epsilon_profile_rejects_an_invalid_peak_percentile(self):
+        h = np.ones(5, dtype=complex)
+        with self.assertRaisesRegex(ValueError, "peak_percentile"):
+            epsilon_profile(h, np.ones(5), 0.02, peak_percentile=0.0)
+        with self.assertRaisesRegex(ValueError, "peak_percentile"):
+            epsilon_profile(h, np.ones(5), 0.02, peak_percentile=101.0)
+
+    def test_epsilon_profile_ignores_out_of_band_artifact_with_mask(self):
+        h = np.ones(101, dtype=complex)
+        h[95:] = 50.0
+        mask = np.zeros(101, dtype=bool)
+        mask[:90] = True
+
+        masked = epsilon_profile(
+            h, np.ones(h.size), 0.02, reference_mask=mask
+        )
+
+        self.assertAlmostEqual(masked[0], 0.02, places=6)
+
+    def test_reference_mask_must_match_the_spectrum_shape(self):
+        with self.assertRaisesRegex(ValueError, "reference_mask"):
+            epsilon_profile(
+                np.ones(5), np.ones(5), 0.02, reference_mask=np.ones(4, dtype=bool)
+            )
+
     def test_overlap_add_identity_reconstructs_audio_without_block_discontinuities(self):
         fft_size = 64
         equalizer = OverlapAddFFTEqualizer(np.ones(fft_size // 2 + 1), fft_size)
@@ -69,3 +117,15 @@ class InverseFilterTests(unittest.TestCase):
         equalizer = OverlapAddFFTEqualizer(np.ones(9), fft_size=16)
         with self.assertRaisesRegex(ValueError, "exactamente"):
             equalizer.process_block(np.zeros(7))
+
+    def test_overlap_add_reuses_preallocated_circular_buffers(self):
+        fft_size = 64
+        equalizer = OverlapAddFFTEqualizer(np.ones(fft_size // 2 + 1), fft_size)
+        ring_id = id(equalizer._input_ring)
+        frame_id = id(equalizer._frame)
+
+        for block in np.zeros((8, equalizer.hop_size)):
+            equalizer.process_block(block)
+
+        self.assertEqual(id(equalizer._input_ring), ring_id)
+        self.assertEqual(id(equalizer._frame), frame_id)

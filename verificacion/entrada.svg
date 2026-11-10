@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="360" viewBox="0 0 900 360">
+<rect width="100%" height="100%" fill="white"/>
+<text x="70" y="20" font-family="sans-serif" font-size="16">Nivel RMS por bloques de 100 ms</text>
+<path d="M 70 300.0 H 860" stroke="#ddd"/>
+<text x="12" y="304.0" font-family="sans-serif" font-size="12">-120 dBFS</text>
+<path d="M 70 255.0 H 860" stroke="#ddd"/>
+<text x="12" y="259.0" font-family="sans-serif" font-size="12">-100 dBFS</text>
+<path d="M 70 210.0 H 860" stroke="#ddd"/>
+<text x="12" y="214.0" font-family="sans-serif" font-size="12">-80 dBFS</text>
+<path d="M 70 165.0 H 860" stroke="#ddd"/>
+<text x="12" y="169.0" font-family="sans-serif" font-size="12">-60 dBFS</text>
+<path d="M 70 120.0 H 860" stroke="#ddd"/>
+<text x="12" y="124.0" font-family="sans-serif" font-size="12">-40 dBFS</text>
+<path d="M 70 75.0 H 860" stroke="#ddd"/>
+<text x="12" y="79.0" font-family="sans-serif" font-size="12">-20 dBFS</text>
+<path d="M 70 30.0 H 860" stroke="#ddd"/>
+<text x="12" y="34.0" font-family="sans-serif" font-size="12">0 dBFS</text>
+<path d="M 70 165.0 H 860" stroke="#c33" stroke-dasharray="6 4"/>
+<polyline points="70.0,97.4 80.0,96.6 90.0,116.5 100.0,110.5 110.0,112.8 120.0,111.9 130.0,109.0 140.0,126.8 150.0,143.0 160.0,124.3 170.0,117.9 180.0,128.4 190.0,135.4 200.0,136.0 210.0,130.3 220.0,129.6 230.0,137.0 240.0,141.6 250.0,137.3 260.0,138.9 270.0,127.5 280.0,108.3 290.0,88.1 300.0,92.9 310.0,108.9 320.0,125.0 330.0,126.2 340.0,111.9 350.0,98.3 360.0,108.9 370.0,107.4 380.0,112.7 390.0,104.4 400.0,123.6 410.0,121.5 420.0,106.5 430.0,122.4 440.0,122.1 450.0,121.8 460.0,120.4 470.0,115.4 480.0,120.9 490.0,123.4 500.0,116.7 510.0,113.1 520.0,103.7 530.0,113.5 540.0,115.7 550.0,116.3 560.0,112.6 570.0,110.9 580.0,116.0 590.0,63.5 600.0,60.6 610.0,84.2 620.0,77.1 630.0,86.4 640.0,82.0 650.0,86.8 660.0,79.8 670.0,91.7 680.0,70.8 690.0,77.3 700.0,107.1 710.0,99.4 720.0,85.7 730.0,106.2 740.0,99.1 750.0,96.5 760.0,99.9 770.0,94.4 780.0,97.5 790.0,79.7 800.0,92.3 810.0,76.3 820.0,88.3 830.0,98.2 840.0,76.5 850.0,92.7 860.0,94.5" fill="none" stroke="#1769aa" stroke-width="2"/>
+<text x="70" y="335" font-family="sans-serif" font-size="14">PASS: La entrada capturó señal por encima del umbral (máximo por bloque -13.61 dBFS; 80/80 bloques).</text>
+</svg>

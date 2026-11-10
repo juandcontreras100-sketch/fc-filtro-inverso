@@ -6,11 +6,11 @@ import time
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from src.dsp.spectrum import CLIP_DB
 from src.ui import theme
 
 DB_MIN = -60.0
 DB_MAX = 0.0
-CLIP_DB = -0.1
 
 
 def db_to_fraction(db: float) -> float:
@@ -153,7 +153,7 @@ class MeterPanel(QtWidgets.QWidget):
     def set_input(self, rms_db: float, peak_db: float) -> None:
         self.input_meter.set_levels(rms_db, peak_db)
 
-    def set_output(self, rms_db: float, peak_db: float) -> None:
+    def set_output(self, rms_db: float, peak_db: float, would_clip: bool = False) -> None:
         self.output_meter.set_levels(rms_db, peak_db)
-        if peak_db >= CLIP_DB:
+        if would_clip or peak_db >= CLIP_DB:
             self.clip.trigger()

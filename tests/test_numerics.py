@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
-from inverse_filter import (
-    epsilon_profile,
-    estimate_h_inverse,
+import inverse_filter as legacy_inverse_filter
+from src.dsp.inverse_filter import epsilon_profile, estimate_h_inverse
+from src.dsp.numerics import (
     calculate_condition_number,
     estimate_error_bounds,
     estimate_h_inverse_gradient,
@@ -12,6 +12,11 @@ from inverse_filter import (
     calculate_filter_energy,
     find_cutoff_frequency,
 )
+
+
+def test_legacy_filter_module_reexports_canonical_implementations():
+    assert legacy_inverse_filter.epsilon_profile is epsilon_profile
+    assert legacy_inverse_filter.estimate_h_inverse is estimate_h_inverse
 
 
 # ──────────────────────────────────────────────────────────────
@@ -108,42 +113,42 @@ def test_estimate_h_inverse_clips_gain_at_deep_notch():
 def test_epsilon_profile_raises_on_shape_mismatch():
     h = np.ones(5, dtype=complex)
     coherence = np.ones(4)  # shape distinto
-    with pytest.raises(ValueError, match="misma forma"):
+    with pytest.raises(ValueError, match="misma longitud"):
         epsilon_profile(h, coherence, epsilon_base=0.01)
 
 
 def test_epsilon_profile_raises_on_nan_in_h():
     h = np.array([1.0, np.nan, 1.0], dtype=complex)
     coherence = np.ones(3)
-    with pytest.raises(ValueError, match="NaN o Inf"):
+    with pytest.raises(ValueError, match="finitos"):
         epsilon_profile(h, coherence, epsilon_base=0.01)
 
 
 def test_epsilon_profile_raises_on_inf_in_coherence():
     h = np.ones(3, dtype=complex)
     coherence = np.array([1.0, np.inf, 1.0])
-    with pytest.raises(ValueError, match="NaN o Inf"):
+    with pytest.raises(ValueError, match="finitos"):
         epsilon_profile(h, coherence, epsilon_base=0.01)
 
 
-def test_epsilon_profile_raises_on_coherence_out_of_bounds():
+def test_epsilon_profile_clips_coherence_above_one():
     h = np.ones(3, dtype=complex)
     coherence = np.array([1.0, 1.5, 0.5])  # > 1
-    with pytest.raises(ValueError, match="rango físico \\[0, 1\\]"):
-        epsilon_profile(h, coherence, epsilon_base=0.01)
+    eps = epsilon_profile(h, coherence, epsilon_base=0.01)
+    assert np.allclose(eps, [0.01, 0.01, 0.035])
 
 
-def test_epsilon_profile_raises_on_negative_coherence():
+def test_epsilon_profile_clips_negative_coherence():
     h = np.ones(3, dtype=complex)
     coherence = np.array([1.0, -0.1, 0.5])  # < 0
-    with pytest.raises(ValueError, match="rango físico \\[0, 1\\]"):
-        epsilon_profile(h, coherence, epsilon_base=0.01)
+    eps = epsilon_profile(h, coherence, epsilon_base=0.01)
+    assert np.allclose(eps, [0.01, 0.06, 0.035])
 
 
 def test_estimate_h_inverse_raises_on_shape_mismatch():
     h = np.ones(5, dtype=complex)
     coherence = np.ones(4)
-    with pytest.raises(ValueError, match="misma forma"):
+    with pytest.raises(ValueError, match="misma longitud"):
         estimate_h_inverse(h, coherence, epsilon_base=0.01, max_gain_db=12.0)
 
 
@@ -171,7 +176,7 @@ def test_epsilon_profile_handles_all_zero_H():
     epsilon_base = 0.02
     eps = epsilon_profile(h, coherence, epsilon_base)
     # epsilon_base * eps_mach * (1 + k*0)  ≈  0.02 * 2.22e-16
-    expected = epsilon_base * np.finfo(float).eps
+    expected = np.finfo(float).eps
     assert np.allclose(eps, expected)
 
 
@@ -193,6 +198,20 @@ def test_calculate_condition_number_formula():
     kappa = calculate_condition_number(h, epsilon)
     expected = (np.abs(h) ** 2 + epsilon) / epsilon
     assert np.allclose(kappa, expected)
+
+
+def test_calculate_condition_number_accepts_epsilon_above_one():
+    h = np.array([2.0, 0.5], dtype=complex)
+    epsilon = np.array([4.0, 0.25])
+
+    kappa = calculate_condition_number(h, epsilon)
+
+    assert np.allclose(kappa, [2.0, 2.0])
+
+
+def test_calculate_condition_number_rejects_non_positive_epsilon():
+    with pytest.raises(ValueError, match="epsilon debe ser positivo"):
+        calculate_condition_number(np.ones(2), np.array([0.0, 1.0]))
 
 
 def test_calculate_condition_number_high_at_deep_notch():
@@ -253,6 +272,26 @@ def test_estimate_h_inverse_gradient_converges_to_analytic():
     assert np.allclose(h_inv_grad, h_inv_analytic, rtol=0.01, atol=1e-3), (
         f"Gradiente no converge: max diff = {np.max(np.abs(h_inv_grad - h_inv_analytic))}"
     )
+
+
+def test_estimate_h_inverse_gradient_can_start_from_an_initial_guess():
+    h = np.array([1.0, 0.5, 0.2, 0.5, 1.0], dtype=complex)
+    coherence = np.ones(h.size)
+    epsilon_base = 0.01
+    epsilon = epsilon_profile(h, coherence, epsilon_base)
+    target = np.conj(h) / (np.abs(h) ** 2 + epsilon)
+    learning_rate = 0.5 / np.max(np.abs(h) ** 2 + epsilon)
+
+    result = estimate_h_inverse_gradient(
+        h,
+        coherence,
+        epsilon_base,
+        iterations=2_000,
+        learning_rate=learning_rate,
+        initial_guess=np.zeros_like(h),
+    )
+
+    assert np.allclose(result, target, rtol=1e-3, atol=1e-3)
 
 
 def test_estimate_h_inverse_gradient_monotonic_cost_decrease():

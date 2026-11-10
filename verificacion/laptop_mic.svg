@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="360" viewBox="0 0 900 360">
+<rect width="100%" height="100%" fill="white"/>
+<text x="70" y="20" font-family="sans-serif" font-size="16">Nivel RMS por bloques de 100 ms</text>
+<path d="M 70 300.0 H 860" stroke="#ddd"/>
+<text x="12" y="304.0" font-family="sans-serif" font-size="12">-120 dBFS</text>
+<path d="M 70 255.0 H 860" stroke="#ddd"/>
+<text x="12" y="259.0" font-family="sans-serif" font-size="12">-100 dBFS</text>
+<path d="M 70 210.0 H 860" stroke="#ddd"/>
+<text x="12" y="214.0" font-family="sans-serif" font-size="12">-80 dBFS</text>
+<path d="M 70 165.0 H 860" stroke="#ddd"/>
+<text x="12" y="169.0" font-family="sans-serif" font-size="12">-60 dBFS</text>
+<path d="M 70 120.0 H 860" stroke="#ddd"/>
+<text x="12" y="124.0" font-family="sans-serif" font-size="12">-40 dBFS</text>
+<path d="M 70 75.0 H 860" stroke="#ddd"/>
+<text x="12" y="79.0" font-family="sans-serif" font-size="12">-20 dBFS</text>
+<path d="M 70 30.0 H 860" stroke="#ddd"/>
+<text x="12" y="34.0" font-family="sans-serif" font-size="12">0 dBFS</text>
+<path d="M 70 142.5 H 860" stroke="#c33" stroke-dasharray="6 4"/>
+<polyline points="70.0,209.5 86.1,205.5 102.2,212.4 118.4,206.1 134.5,210.3 150.6,207.4 166.7,208.2 182.9,211.3 199.0,210.2 215.1,208.9 231.2,208.0 247.3,209.2 263.5,207.5 279.6,211.0 295.7,210.4 311.8,211.4 328.0,211.0 344.1,125.6 360.2,73.7 376.3,70.3 392.4,67.4 408.6,70.1 424.7,70.5 440.8,73.7 456.9,73.2 473.1,73.9 489.2,75.1 505.3,76.5 521.4,76.2 537.6,77.8 553.7,90.2 569.8,199.6 585.9,207.6 602.0,209.8 618.2,210.1 634.3,210.5 650.4,166.6 666.5,84.7 682.7,72.3 698.8,67.8 714.9,68.6 731.0,71.7 747.1,77.5 763.3,76.5 779.4,77.6 795.5,77.2 811.6,75.9 827.8,80.1 843.9,86.4 860.0,102.3" fill="none" stroke="#1769aa" stroke-width="2"/>
+<text x="70" y="335" font-family="sans-serif" font-size="14">PASS: La entrada capturó señal por encima del umbral (máximo por bloque -16.64 dBFS; 27/50 bloques).</text>
+</svg>

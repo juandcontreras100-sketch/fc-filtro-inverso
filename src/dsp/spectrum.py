@@ -6,6 +6,8 @@ import numpy as np
 
 DB_FLOOR = -120.0
 DB_CEILING = 6.0
+CLIP_DB = -0.1
+CLIP_THRESHOLD = 10.0 ** (CLIP_DB / 20.0)
 
 
 def spectrum_db(
