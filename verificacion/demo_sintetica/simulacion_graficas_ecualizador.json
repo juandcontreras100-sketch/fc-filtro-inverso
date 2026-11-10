@@ -1,0 +1,24 @@
+{
+  "status": "SIMULATED",
+  "description": "Gr?ficas est?ticas de demostraci?n generadas con se?al y respuesta sint?ticas; no representan medici?n del TL072/circuito.",
+  "sample_rate_hz": 48000,
+  "fft_size": 2048,
+  "duration_seconds": 3.4133333333333336,
+  "response_source": "medicion_H.npy y medicion_gamma2.npy (sint?ticos de demostraci?n)",
+  "input_rms_dbfs": -34.48509043681223,
+  "input_peak_dbfs": -24.848204418986334,
+  "output_rms_dbfs": -33.397980221213444,
+  "output_peak_dbfs": -23.384408757103383,
+  "maximum_inverse_gain_db": 10.968727227729435,
+  "simulated_response_std_db_100_10000_before": 3.5769932799941144,
+  "simulated_response_std_db_100_10000_after": 0.9411486286957841,
+  "simulated_response_flatness_improvement_db": 2.6358446512983305,
+  "clipped_samples_in_last_output_hop": 0,
+  "svg": "C:\\Users\\juan_\\.copilot\\session-state\\0188e29a-2c61-4912-93ca-ac0b01d7880e\\files\\simulacion_graficas_ecualizador.svg",
+  "previous_physical_input_capture": {
+    "status": "PASS",
+    "rms_dbfs": -38.52918780706314,
+    "peak_dbfs": -19.375678197790673,
+    "source_identified": false
+  }
+}
