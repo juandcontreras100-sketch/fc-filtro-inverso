@@ -37,10 +37,12 @@ C0_TARGET_DB = -100.0
 EQ_TARGET_DB = -40.0
 
 
-def circuit_output(x: np.ndarray) -> np.ndarray:
-    """Circuito del banco: y[n] = x[n] + 0.5*x[n-240]."""
+def circuit_output(
+    x: np.ndarray, delay_samples: int = DELAY_SAMPLES
+) -> np.ndarray:
+    """Circuito del banco: y[n] = x[n] + 0.5*x[n-delay_samples]."""
     y = x.copy()
-    y[DELAY_SAMPLES:] += ECHO_GAIN * x[:-DELAY_SAMPLES]
+    y[delay_samples:] += ECHO_GAIN * x[:-delay_samples]
     return y
 
 
@@ -53,11 +55,13 @@ def recover_by_recursion(y: np.ndarray) -> np.ndarray:
     return recovered
 
 
-def circuit_impulse(fft_size: int) -> tuple[np.ndarray, np.ndarray]:
+def circuit_impulse(
+    fft_size: int, delay_samples: int = DELAY_SAMPLES
+) -> tuple[np.ndarray, np.ndarray]:
     """H(f) del circuito muestreada en ``fft_size`` bins de la rfft."""
     h_circuit = np.zeros(fft_size)
     h_circuit[0] = 1.0
-    h_circuit[DELAY_SAMPLES] = ECHO_GAIN
+    h_circuit[delay_samples] = ECHO_GAIN
     return h_circuit, np.fft.rfft(h_circuit, fft_size)
 
 
@@ -105,11 +109,14 @@ class TestRealEqualization(unittest.TestCase):
     def test_c1_fft512_equalizes_the_echo_circuit_below_minus_40_db(self):
         fft_size = 512
         hop_size = fft_size // 2
+        # A 5 ms echo needs a longer inverse than N=512 can represent. Use
+        # 1.25 ms here so the finite N-sample causal inverse has adequate tail.
+        delay_samples = 60
         rng = np.random.default_rng(SEED)
         x = rng.standard_normal(BLOCK_HOPS * hop_size)
-        y = circuit_output(x)
+        y = circuit_output(x, delay_samples)
 
-        _h_circuit, spectrum = circuit_impulse(fft_size)
+        _h_circuit, spectrum = circuit_impulse(fft_size, delay_samples)
         coherence = np.ones(spectrum.size)
         h_inverse = estimate_h_inverse(
             spectrum,

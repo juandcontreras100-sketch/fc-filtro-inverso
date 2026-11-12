@@ -58,6 +58,22 @@ class SessionRecorderTests(unittest.TestCase):
     def test_metadata_matches_the_engine_state(self):
         calibration = self.root / "medicion_temporal.npy"
         np.save(calibration, np.ones(self.bins, dtype=np.complex128))
+        np.save(
+            self.root / "medicion_temporal_gamma2.npy",
+            np.ones(self.bins, dtype=np.float64),
+        )
+        calibration.with_suffix(".json").write_text(
+            json.dumps(
+                {
+                    "format_version": 1,
+                    "sample_rate_hz": self.engine.sample_rate,
+                    "fft_size_samples": self.engine.fft_size,
+                    "frequency_range_hz": [20.0, 20_000.0],
+                    "synthetic": False,
+                }
+            ),
+            encoding="utf-8",
+        )
         self.engine.device = (1, 7)
         self.engine.epsilon_base = 0.03
         self.engine.max_gain_db = 9.0

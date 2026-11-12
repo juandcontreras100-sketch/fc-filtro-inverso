@@ -41,17 +41,24 @@ powershell -ExecutionPolicy Bypass -File .\crear_accesos.ps1
 
 ## La interfaz
 
+Captura reproducible con señales sintéticas y sin hardware:
+
+![Interfaz tras las correcciones](docs/ui_after.png)
+
 - **Panel de control** (izquierda): modo *bypass* / *ecualizado*, carga de la
   medición `.npy`, ganancia máxima, estabilidad (ε), interfaz de audio,
   frecuencia de muestreo y tamaño de FFT.
-- **Medidores de nivel**: pico y RMS de entrada y salida. Un limitador suave
-  protege la salida; `CLIP` indica que la señal previa al limitador habría
-  alcanzado el umbral de saturación.
+- **Medidores de nivel**: pico y RMS de entrada y salida. Los indicadores
+  `IN CLIP` y `OUT CLIP` se retienen por separado cuando cada señal alcanza
+  0,999 de escala lineal. Un limitador suave protege la salida.
 - **Espectros**: entrada (naranja) y salida (verde), más la curva del filtro
-  inverso aplicado (azul discontinuo). Pase el ratón por encima para leer la
-  frecuencia y los dB exactos del cursor. La salida usa dBFS y el filtro tiene
-  un eje independiente de ganancia en dB.
-- **Cascada**: historial del espectro de salida; el tiempo avanza hacia abajo.
+  inverso aplicado (azul discontinuo). La gráfica inferior muestra por defecto
+  la respuesta medida, la inversa y su producto; se puede alternar a una
+  comparación entrada/salida. Sin calibración válida aparece «Sin calibración
+  cargada» en vez de curvas de respuesta ficticias. Los ejes de frecuencia de
+  los espectros usan kHz; pase el ratón para leer Hz y niveles.
+- **Cascada**: historial lineal en kHz del espectro de salida en dBFS; el
+  tiempo avanza hacia abajo y la escala de color se fija entre −140 y +6 dBFS.
 
 Cambiar la interfaz, el muestreo o el tamaño de FFT reinicia el stream de audio.
 La calibración se descarta si deja de ser compatible con el nuevo tamaño de FFT
@@ -103,13 +110,21 @@ También puede cargar la medición desde el botón *Cargar medicion (.npy)...* d
 panel de control, sin reiniciar el programa.
 
 Para probar la interfaz sin circuito, `generar_medicion_demo.py` sintetiza una
-medición con muescas en 1 kHz y 4 kHz. Acepte el formato predeterminado o
-especifique el mismo tamaño FFT y frecuencia de muestreo que usará en la interfaz:
+medición con muescas en 1 kHz y 4 kHz. Los archivos llevan `medicion_sintetica`
+en el nombre y un sidecar JSON que identifica la procedencia. Acepte el formato
+predeterminado o especifique el mismo tamaño FFT y frecuencia de muestreo que
+usará en la interfaz:
 
 ```powershell
 py generar_medicion_demo.py --fft-size 4096 --sample-rate 96000
-py main.py --fft-size 4096 --sample-rate 96000 --h-response medicion_H.npy --coherence medicion_gamma2.npy
+py main.py --fft-size 4096 --sample-rate 96000 --h-response medicion_sintetica_H.npy --coherence medicion_sintetica_gamma2.npy
 ```
+
+El sidecar de calibración debe incluir versión del formato, frecuencia de
+muestreo, tamaño FFT, rango válido en Hz y la marca `synthetic`. La aplicación
+rechaza calibraciones sin esos metadatos o incompatibles con el formato actual.
+Los gráficos y exportaciones indican si los datos son sintéticos o no sintéticos;
+no se debe interpretar una demo como una medición física.
 
 ## Calibración dB SPL
 
@@ -153,11 +168,11 @@ comprobarlo.
 ### Ponderación, zonas y unidades
 
 - **Z:** nivel total sin ponderación de frecuencia.
-- **A:** nivel total con ponderación A, que atenúa graves y agudos para aproximar
-  la sensibilidad del oído humano.
+- **A:** nivel total con ponderación A.
+- **C:** nivel total con ponderación C, de menor atenuación en graves que A.
 
-Z/A se aplica al **nivel total**. La curva FFT de entrada solo recibe el offset
-cuando se muestra en dB SPL; no se le aplica la ponderación Z/A. La salida, el
+Z/A/C se aplica al **nivel total**. La curva FFT de entrada solo recibe el offset
+cuando se muestra en dB SPL; no se le aplica la ponderación. La salida, el
 espectrograma, los medidores de pico/RMS y la indicación `CLIP` permanecen
 siempre en dBFS.
 
@@ -175,6 +190,19 @@ encima de 85 dB SPL. Como contexto aproximado:
 La precisión de las lecturas depende de la referencia utilizada, la ganancia y el
 dispositivo de entrada. Una calibración solo es representativa de la cadena con
 la que se midió.
+
+## Convenciones DSP y latencia
+
+Los niveles espectrales usan dBFS de pico (amplitud lineal 1 equivale a 0 dBFS),
+con un piso de visualización de −140 dBFS. El nivel RMS total de un seno a escala
+completa es aproximadamente −3,01 dBFS. La convolución WOLA es causal y añade
+un hop de latencia algorítmica (por ejemplo, 21,3 ms con FFT 2048 a 48 kHz);
+esto no incluye los buffers de entrada/salida del dispositivo, que dependen del
+hardware y no se verifican en las pruebas sintéticas.
+
+El parámetro ε es adimensional y regulariza respecto de la potencia de
+referencia de la respuesta, proporcional a `|H(f)|²`; aumentarlo suaviza la
+inversión. La ganancia máxima se expresa en dB.
 
 ## Pruebas automatizadas
 
@@ -211,6 +239,7 @@ calibrate_hardware.py         Medición por barrido logarítmico (log sine sweep
 generar_medicion_demo.py      Medición sintética para probar la interfaz.
 crear_accesos.ps1             Genera los accesos directos del escritorio.
 src/audio/engine.py           Stream full-duplex, ecualizador y calibración.
+src/config.py                 Constantes DSP, formato, frecuencia y visualización.
 src/dsp/inverse_filter.py     Filtro inverso Wiener/Tikhonov y procesador WOLA.
 src/dsp/numerics.py           Métodos numéricos y métricas académicas.
 analisis_numerico.py          Comparación analítica/gradiente y linealidad.

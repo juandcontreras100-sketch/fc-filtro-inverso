@@ -14,12 +14,19 @@ from __future__ import annotations
 
 import os
 import queue
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from src.config import (
+    DEFAULT_EPSILON_RATIO,
+    DEFAULT_MAX_GAIN_DB,
+    DEFAULT_SAMPLE_RATE_HZ,
+    DEFAULT_FFT_SIZE_SAMPLES,
+)
 from src.dsp.inverse_filter import OverlapAddFFTEqualizer, estimate_h_inverse
 from src.dsp.limiter import DEFAULT_CEILING, DEFAULT_THRESHOLD, soft_limit
 from src.dsp.spectrum import CLIP_THRESHOLD
@@ -52,6 +59,7 @@ class SpectrumFrame:
     would_clip: bool = False
     input_window: np.ndarray | None = None
     output_window: np.ndarray | None = None
+    input_would_clip: bool = False
 
 
 def put_latest(target: "queue.Queue[Any]", item: Any) -> None:
@@ -81,8 +89,8 @@ class AudioEngine:
     def __init__(
         self,
         *,
-        sample_rate: float = 48_000.0,
-        fft_size: int = 2_048,
+        sample_rate: float = DEFAULT_SAMPLE_RATE_HZ,
+        fft_size: int = DEFAULT_FFT_SIZE_SAMPLES,
         channels: int = 1,
         device: str | int | None = None,
     ) -> None:
@@ -92,8 +100,8 @@ class AudioEngine:
         self.device = device
 
         self.bypass = True
-        self.max_gain_db = 12.0
-        self.epsilon_base = 0.02
+        self.max_gain_db = DEFAULT_MAX_GAIN_DB
+        self.epsilon_base = DEFAULT_EPSILON_RATIO
         # Estado de presentacion de la entrada; el callback nunca lo consulta.
         self.spl_offset_db: float | None = None
         self.weighting: str = "Z"
@@ -103,6 +111,8 @@ class AudioEngine:
         self.h_response: np.ndarray | None = None
         self.coherence: np.ndarray | None = None
         self.calibration_path: Path | None = None
+        self.calibration_synthetic = False
+        self.calibration_frequency_range_hz: tuple[float, float] | None = None
         # Frecuencia de muestreo con la que se cargo la calibracion: los bins de
         # una medicion solo significan lo mismo a esa frecuencia.
         self._calibration_sample_rate: float | None = None
@@ -143,6 +153,16 @@ class AudioEngine:
     def seconds_per_row(self) -> float:
         """Duracion que representa una fila de la cascada."""
         return self.hop_size / self.sample_rate
+
+    @property
+    def algorithmic_latency_samples(self) -> int:
+        """Retardo WOLA en muestras, sin incluir buffers del dispositivo."""
+        return self.hop_size
+
+    @property
+    def algorithmic_latency_seconds(self) -> float:
+        """Retardo WOLA en segundos, sin incluir buffers del dispositivo."""
+        return self.algorithmic_latency_samples / self.sample_rate
 
     def _create_equalizer(self) -> OverlapAddFFTEqualizer:
         return OverlapAddFFTEqualizer(
@@ -186,31 +206,126 @@ class AudioEngine:
         h_path: str | Path,
         coherence_path: str | Path | None = None,
     ) -> None:
-        """Carga H(f) y opcionalmente la coherencia; valida las longitudes."""
-        h = np.load(h_path)
+        """Carga H(f) y coherencia solo si los datos y metadatos son compatibles."""
+        response_path = Path(h_path)
+        metadata_path = response_path.with_suffix(".json")
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except FileNotFoundError as error:
+            raise ValueError(
+                f"Faltan metadatos de calibracion ({metadata_path.name}); "
+                "no se puede verificar fs, N ni procedencia."
+            ) from error
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ValueError(
+                f"No se pudieron leer los metadatos de calibracion "
+                f"{metadata_path}: {error}"
+            ) from error
+
+        if not isinstance(metadata, dict) or metadata.get("format_version") != 1:
+            raise ValueError("metadata de calibracion debe usar format_version=1")
+        metadata_rate = metadata.get("sample_rate_hz")
+        metadata_size = metadata.get("fft_size_samples")
+        synthetic = metadata.get("synthetic")
+        frequency_range = metadata.get("frequency_range_hz")
+        if (
+            isinstance(metadata_rate, bool)
+            or not isinstance(metadata_rate, (int, float))
+            or not np.isfinite(metadata_rate)
+            or not np.isclose(float(metadata_rate), self.sample_rate, rtol=0.0, atol=1e-6)
+        ):
+            raise ValueError(
+                f"sample_rate_hz incompatible: se espera {self.sample_rate:g} Hz"
+            )
+        if (
+            isinstance(metadata_size, bool)
+            or not isinstance(metadata_size, int)
+            or metadata_size != self.fft_size
+        ):
+            raise ValueError(
+                f"fft_size_samples incompatible: se espera {self.fft_size}"
+            )
+        if not isinstance(synthetic, bool):
+            raise ValueError("metadata.synthetic debe ser true o false")
+        if (
+            not isinstance(frequency_range, list)
+            or len(frequency_range) != 2
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not np.isfinite(value)
+                for value in frequency_range
+            )
+        ):
+            raise ValueError("metadata.frequency_range_hz debe ser [inicio, fin]")
+        frequency_min_hz, frequency_max_hz = map(float, frequency_range)
+        if not (
+            0.0 <= frequency_min_hz < frequency_max_hz <= self.nyquist
+        ):
+            raise ValueError(
+                "metadata.frequency_range_hz debe estar dentro de 0..Nyquist"
+            )
+
+        if coherence_path is None:
+            coherence_stem = response_path.stem.replace("_H", "_gamma2")
+            if coherence_stem == response_path.stem:
+                coherence_stem = f"{response_path.stem}_gamma2"
+            candidate = response_path.with_name(f"{coherence_stem}.npy")
+            if candidate.exists():
+                coherence_path = candidate
+
+        h = np.load(response_path, allow_pickle=False)
+        if h.dtype.kind != "c":
+            raise ValueError(f"{response_path} debe contener H(f) compleja")
         if h.ndim != 1 or h.size != self.bin_count:
             raise ValueError(
-                f"{h_path} debe contener {self.bin_count} bins para fft_size={self.fft_size}"
+                f"{response_path} debe contener {self.bin_count} bins para "
+                f"fft_size={self.fft_size}"
             )
+        if not np.all(np.isfinite(h)):
+            raise ValueError(f"{response_path} debe contener solo valores finitos")
+
         coherence: np.ndarray | None = None
         if coherence_path is not None:
-            coherence = np.load(coherence_path)
+            coherence = np.load(coherence_path, allow_pickle=False)
+            if coherence.dtype.kind != "f":
+                raise ValueError(f"{coherence_path} debe contener coherencia real")
             if coherence.ndim != 1 or coherence.size != self.bin_count:
                 raise ValueError(
                     f"{coherence_path} debe contener {self.bin_count} bins "
                     f"para fft_size={self.fft_size}"
                 )
-        self.h_response = np.asarray(h, dtype=np.complex128)
-        self.coherence = None if coherence is None else np.asarray(coherence, dtype=np.float64)
-        self.calibration_path = Path(h_path)
+            if not np.all(np.isfinite(coherence)) or np.any(
+                (coherence < 0.0) | (coherence > 1.0)
+            ):
+                raise ValueError(f"{coherence_path} debe contener gamma² entre 0 y 1")
+
+        validated_h = np.asarray(h, dtype=np.complex128)
+        validated_coherence = (
+            None if coherence is None else np.asarray(coherence, dtype=np.float64)
+        )
+        # Build before publishing so any numerical failure leaves the old
+        # calibration and filter untouched.
+        inverse = self._estimate_inverse(validated_h, validated_coherence)
+        self.h_response = validated_h
+        self.coherence = validated_coherence
+        self.calibration_path = response_path
+        self.calibration_synthetic = synthetic
+        self.calibration_frequency_range_hz = (
+            frequency_min_hz,
+            frequency_max_hz,
+        )
         self._calibration_sample_rate = self.sample_rate
-        self.recompute_inverse()
+        self.equalizer.h_inverse = inverse
+        self.revision += 1
 
     def clear_calibration(self) -> None:
         """Olvida la medicion y vuelve a un filtro plano."""
         self.h_response = None
         self.coherence = None
         self.calibration_path = None
+        self.calibration_synthetic = False
+        self.calibration_frequency_range_hz = None
         self._calibration_sample_rate = None
         self.recompute_inverse()
 
@@ -225,42 +340,46 @@ class AudioEngine:
 
     def recompute_inverse(self) -> None:
         """Recalcula H^-1 y lo publica sin reiniciar el stream de audio."""
-        bins = self.bin_count
-        if self.bypass or self.h_response is None:
-            h_inverse = np.ones(bins, dtype=np.complex128)
-        else:
-            coherence = (
-                np.ones(bins, dtype=np.float64) if self.coherence is None else self.coherence
-            )
-            frequencies = np.fft.rfftfreq(self.fft_size, 1.0 / self.sample_rate)
-            upper = min(10_000.0, 0.95 * self.sample_rate / 2.0)
-            reference_band = (frequencies >= 100.0) & (frequencies <= upper)
-            if not np.any(reference_band):
-                reference_band = np.ones(bins, dtype=bool)
-
-            # La escala absoluta de H depende del volumen de reproducción y
-            # de la ganancia del micrófono. El filtro solo debe corregir la
-            # forma, no cambiar el nivel global de la comparación A/B.
-            h_response = self.h_response
-            reference = float(np.median(np.abs(h_response[reference_band])))
-            if np.isfinite(reference) and reference > 0.0:
-                h_response = h_response / reference
-
-            h_inverse = estimate_h_inverse(
-                h_response,
-                coherence,
-                epsilon_base=self.epsilon_base,
-                max_gain_db=self.max_gain_db,
-                # Un artefacto aislado (p. ej. un pico ultrasónico de la
-                # medición) no debe regularizar toda la banda de voz. La
-                # referencia es la potencia mediana de la banda, no su pico:
-                # así una resonancia ancha no aplasta el nivel global.
-                peak_percentile=50.0,
-                reference_mask=reference_band,
-            )
+        h_inverse = self._estimate_inverse(self.h_response, self.coherence)
         # Asignacion atomica: el callback nunca ve un array a medio construir.
         self.equalizer.h_inverse = h_inverse
         self.revision += 1
+
+    def _estimate_inverse(
+        self,
+        h_response: np.ndarray | None,
+        coherence: np.ndarray | None,
+    ) -> np.ndarray:
+        """Calcula el inverso localmente para publicar solo resultados completos."""
+        if self.bypass or h_response is None:
+            return np.ones(self.bin_count, dtype=np.complex128)
+
+        gamma_squared = (
+            np.zeros(self.bin_count, dtype=np.float64)
+            if coherence is None
+            else coherence
+        )
+        frequencies = np.fft.rfftfreq(self.fft_size, 1.0 / self.sample_rate)
+        upper = min(10_000.0, 0.95 * self.nyquist)
+        reference_band = (frequencies >= 100.0) & (frequencies <= upper)
+        if not np.any(reference_band):
+            reference_band = np.ones(self.bin_count, dtype=bool)
+
+        # Normalize only the reference band so absolute playback and mic gain
+        # do not change the A/B level; coherence still gates every bin.
+        normalized_h = h_response
+        reference = float(np.median(np.abs(normalized_h[reference_band])))
+        if np.isfinite(reference) and reference > 0.0:
+            normalized_h = normalized_h / reference
+
+        return estimate_h_inverse(
+            normalized_h,
+            gamma_squared,
+            epsilon_base=self.epsilon_base,
+            max_gain_db=self.max_gain_db,
+            peak_percentile=50.0,
+            reference_mask=reference_band,
+        )
 
     # ----------------------------------------------------------------- formato
     def configure(
@@ -415,6 +534,7 @@ class AudioEngine:
         aligned_input = self._pending_display_input
         self._pending_display_input = input_block.copy()
         would_clip = bool(np.max(np.abs(output_block)) >= CLIP_THRESHOLD)
+        input_would_clip = bool(np.max(np.abs(aligned_input)) >= CLIP_THRESHOLD)
 
         # Anillos preasignados: la GUI recibe siempre la ultima ventana
         # completa de fft_size muestras, sin depender de que no se pierda
@@ -446,5 +566,6 @@ class AudioEngine:
                 would_clip=would_clip,
                 input_window=input_window,
                 output_window=output_window,
+                input_would_clip=input_would_clip,
             ),
         )

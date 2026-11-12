@@ -31,6 +31,7 @@ class _CursorCurve:
     view: Any
     marker: pg.ScatterPlotItem
     label: pg.TextItem
+    enabled: bool
     # Clave en ``set_spectra``; permite que una curva muestre otra unidad.
     data_key: str
 
@@ -48,9 +49,13 @@ class CursorReadout:
         plots: Sequence[pg.PlotItem],
         log_x: bool = False,
         curves: Sequence[Sequence[Mapping[str, Any]]] | None = None,
+        frequency_scale: float = 1.0,
     ) -> None:
         self._plots = list(plots)
         self._log_x = bool(log_x)
+        if not np.isfinite(frequency_scale) or frequency_scale <= 0.0:
+            raise ValueError("frequency_scale debe ser finita y positiva")
+        self._frequency_scale = float(frequency_scale)
         self._lines: list[pg.InfiniteLine] = []
         self._curves: list[_CursorCurve] = []
 
@@ -108,6 +113,7 @@ class CursorReadout:
                 view=view,
                 marker=marker,
                 label=label,
+                enabled=True,
                 data_key=data_key,
             )
         )
@@ -134,6 +140,17 @@ class CursorReadout:
         self._names = {} if names is None else names
         self._labels = None if labels is None else np.asarray(labels, dtype=np.float64)
 
+    def set_enabled(
+        self, plot: pg.PlotItem, names: set[str], enabled: bool
+    ) -> None:
+        """Enables cursor markers only for curves visible in the selected view."""
+        for curve in self._curves:
+            if curve.plot is plot and curve.name in names:
+                curve.enabled = enabled
+                if not enabled:
+                    curve.marker.setVisible(False)
+                    curve.label.setVisible(False)
+
     def handle_mouse(self, position: QtCore.QPointF) -> str | None:
         """Actualiza lineas, marcadores y etiquetas; devuelve el texto de lectura."""
         target = None
@@ -157,6 +174,10 @@ class CursorReadout:
             line.setVisible(True)
 
         for curve in self._curves:
+            if not curve.enabled:
+                curve.marker.setVisible(False)
+                curve.label.setVisible(False)
+                continue
             values = self._spectra.get(curve.data_key)
             if values is None:
                 # Sin datos propios se usa la serie del mismo nombre.
@@ -195,14 +216,15 @@ class CursorReadout:
             index = max(0, min(index, self._labels.size - 1))
             return float(self._labels[index])
         if self._log_x:
-            return float(10.0 ** x)
+            return float(10.0**x * self._frequency_scale)
         return float(x)
 
     def _value_at(self, frequency: float, values: np.ndarray) -> float | None:
         domain = self._labels if self._labels is not None else self._frequencies
         if domain.size == 0 or values.size != domain.size:
             return None
-        return float(np.interp(frequency, domain, values))
+        value = float(np.interp(frequency, domain, values))
+        return value if np.isfinite(value) else None
 
     def _place_label(self, curve: _CursorCurve, x: float, y: float) -> None:
         """Posiciona la etiqueta a un lado del punto; la voltea en la mitad derecha."""
@@ -232,6 +254,8 @@ class CursorReadout:
             if values.size != domain.size:
                 continue
             level = float(np.interp(frequency, domain, values))
+            if not np.isfinite(level):
+                continue
             unit = self._units.get(name, "dB")
             label = self._names.get(name, name)
             parts.append(f"{label} {level:+.1f} {unit}")

@@ -18,6 +18,7 @@ from pyqtgraph.exporters import ImageExporter
 from PySide6 import QtCore, QtWidgets
 
 from src.audio.engine import AudioEngine, CalibrationDiscardedError
+from src.config import FREQUENCY_MAX_HZ, FREQUENCY_MIN_HZ
 from src.dsp.spectrum import (
     DB_CEILING,
     DB_FLOOR,
@@ -40,6 +41,8 @@ from src.ui.spl_persistence import input_device_name, save_spl_calibration
 
 REFRESH_MS = 33  # ~30 FPS
 BAND_BAR_WIDTH = 0.8  # ancho de las barras de 1/3 de octava, en indices de banda
+# Ancho fijo de los ejes: alinea los titulos de las tres graficas.
+AXIS_WIDTH = 66
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -75,6 +78,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.spectrum_averaging = 0.8
         # Vista del espectro: "linea" (curvas) o "barras" (1/3 de octava).
         self._spectrum_style = "linea"
+        self._third_plot_mode = "respuesta"
         self._band_centers = np.zeros(0)
 
         title = "Ecualizador FFT en tiempo real"
@@ -87,6 +91,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_ui()
         self._connect_signals()
         self._sync_from_engine()
+        QtCore.QTimer.singleShot(0, self._apply_frequency_axis_limits)
 
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self._refresh)
@@ -148,6 +153,22 @@ class MainWindow(QtWidgets.QMainWindow):
             f"border: 1px solid {theme.PANEL_EDGE}; border-radius: 5px; padding: 5px 10px;"
         )
         self._readout_hint = self.readout_label.text()
+        self.calibration_banner = QtWidgets.QLabel("DATOS SINTÉTICOS")
+        self.calibration_banner.setAlignment(QtCore.Qt.AlignCenter)
+        self.calibration_banner.setStyleSheet(
+            f"background-color: #3a2a12; color: {theme.WARNING}; "
+            "font-weight: 700; padding: 3px;"
+        )
+        self._update_calibration_banner()
+        graphs_layout.addWidget(self.calibration_banner)
+        self.response_legend = QtWidgets.QLabel()
+        self.response_legend.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        self.response_legend.setTextFormat(QtCore.Qt.RichText)
+        self.response_legend.setStyleSheet(
+            f"background-color: {theme.PANEL}; padding: 2px 6px;"
+        )
+        self.response_legend.hide()
+        graphs_layout.addWidget(self.response_legend)
         graphs_layout.addWidget(self.readout_label)
 
         self.graphics = pg.GraphicsLayoutWidget()
@@ -163,7 +184,7 @@ class MainWindow(QtWidgets.QMainWindow):
         theme.style_plot(self.input_plot, "Entrada: senal captada")
         self.input_plot.setLogMode(x=True, y=False)
         self.input_plot.setLabel("left", "Magnitud", units="dBFS")
-        self.input_plot.setLabel("bottom", "Frecuencia", units="Hz")
+        self.input_plot.setLabel("bottom", "Frecuencia", units="kHz")
         self.input_plot.setYRange(DB_FLOOR, DB_CEILING, padding=0)
         self.input_plot.showGrid(x=True, y=True, alpha=0.22)
         self.input_curve = self.input_plot.plot(
@@ -172,7 +193,6 @@ class MainWindow(QtWidgets.QMainWindow):
             brush=pg.mkBrush(*theme.INPUT_FILL),
             name="Entrada",
         )
-        self.input_plot.addLegend(offset=(12, 12), labelTextColor=theme.MUTED)
         self.input_bars = pg.BarGraphItem(
             x=np.zeros(0),
             y1=np.zeros(0),
@@ -188,7 +208,7 @@ class MainWindow(QtWidgets.QMainWindow):
         theme.style_plot(self.output_plot, "Salida: senal ecualizada")
         self.output_plot.setLogMode(x=True, y=False)
         self.output_plot.setLabel("left", "Magnitud", units="dBFS")
-        self.output_plot.setLabel("bottom", "Frecuencia", units="Hz")
+        self.output_plot.setLabel("bottom", "Frecuencia", units="kHz")
         self.output_plot.setYRange(DB_FLOOR, DB_CEILING, padding=0)
         self.output_plot.showGrid(x=True, y=True, alpha=0.22)
         self.output_plot.showAxis("right")
@@ -221,10 +241,6 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.filter_band_curve.hide()
         self.filter_view.addItem(self.filter_band_curve)
-        output_legend = self.output_plot.addLegend(
-            offset=(12, 12), labelTextColor=theme.MUTED
-        )
-        output_legend.addItem(self.filter_curve, "Filtro inverso")
         self._update_filter_view_geometry()
         self.output_bars = pg.BarGraphItem(
             x=np.zeros(0),
@@ -236,28 +252,64 @@ class MainWindow(QtWidgets.QMainWindow):
         self.output_bars.hide()
 
         self.graphics.nextRow()
-        self.compare_plot = self.graphics.addPlot(
-            title="Comparacion entrada/salida"
+        self.response_plot = self.graphics.addPlot(title="Respuesta del filtro")
+        theme.style_plot(self.response_plot, "Respuesta del filtro")
+        self.response_plot.setLabel("left", "Magnitud", units="dB")
+        self.response_plot.setLabel("bottom", "Frecuencia", units="kHz")
+        self.response_plot.setLogMode(x=True, y=False)
+        self.response_plot.setXLink(self.input_plot)
+        self.response_plot.showGrid(x=True, y=True, alpha=0.22)
+        self.response_plot.setYRange(-60.0, 6.0, padding=0)
+        self.compare_plot = self.response_plot
+
+        self.response_zero_line = pg.InfiniteLine(
+            pos=0.0, angle=0, pen=pg.mkPen(theme.MUTED, width=1)
         )
-        theme.style_plot(self.compare_plot, "Comparacion entrada/salida")
-        self.compare_plot.setLabel("left", "Magnitud", units="dBFS")
-        self.compare_plot.setLabel("bottom", "Frecuencia", units="Hz")
-        self.compare_plot.setLogMode(x=True, y=False)
-        self.compare_plot.setXLink(self.input_plot)
-        self.compare_plot.showGrid(x=True, y=True, alpha=0.22)
-        self.compare_plot.setYRange(DB_FLOOR, DB_CEILING, padding=0)
-        self.compare_plot.addLegend(offset=(12, 12), labelTextColor=theme.MUTED)
-        self.compare_input_curve = self.compare_plot.plot(
-            pen=pg.mkPen(theme.INPUT, width=1.5), name="Entrada"
+        self.response_plot.addItem(self.response_zero_line)
+        self.response_message = pg.TextItem(
+            "Sin calibración cargada", color=theme.MUTED, anchor=(0.5, 0.5)
         )
-        self.compare_output_curve = self.compare_plot.plot(
-            pen=pg.mkPen(theme.OUTPUT, width=1.5), name="Salida"
+        self.response_plot.addItem(self.response_message)
+        self.response_measured_curve = self.response_plot.plot(
+            pen=pg.mkPen(theme.INPUT, width=1.5)
         )
+        self.response_inverse_curve = self.response_plot.plot(
+            pen=pg.mkPen(theme.FILTER, width=1.5)
+        )
+        self.response_product_curve = self.response_plot.plot(
+            pen=pg.mkPen(theme.OUTPUT, width=1.5)
+        )
+        self.compare_input_curve = self.response_plot.plot(
+            pen=pg.mkPen(theme.INPUT, width=1.5)
+        )
+        self.compare_output_curve = self.response_plot.plot(
+            pen=pg.mkPen(theme.OUTPUT, width=1.5)
+        )
+        for curve in (
+            self.compare_input_curve,
+            self.compare_output_curve,
+            self.response_measured_curve,
+            self.response_inverse_curve,
+            self.response_product_curve,
+        ):
+            curve.hide()
+
+        self.output_plot.setXLink(self.input_plot)
+        for plot in (self.input_plot, self.output_plot, self.response_plot):
+            plot.getAxis("left").setWidth(AXIS_WIDTH)
+            plot.getAxis("right").setWidth(AXIS_WIDTH)
+            plot.showAxis("right")
+        # Entrada y comparacion no usan la escala derecha, pero reservan el
+        # mismo ancho para que los titulos queden alineados con la salida.
+        for plot in (self.input_plot, self.response_plot):
+            right = plot.getAxis("right")
+            right.setStyle(showValues=False)
+            right.setTicks([])
 
         for view in (
             self.input_plot.getViewBox(),
             self.output_plot.getViewBox(),
-            self.compare_plot.getViewBox(),
+            self.response_plot.getViewBox(),
             self.filter_view,
         ):
             view.setDefaultPadding(0.0)
@@ -265,6 +317,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.readout = CursorReadout(
             [self.input_plot, self.output_plot, self.compare_plot],
             log_x=True,
+            frequency_scale=1_000.0,
             curves=[
                 [{"name": "entrada", "color": theme.INPUT}],
                 [
@@ -276,6 +329,21 @@ class MainWindow(QtWidgets.QMainWindow):
                     },
                 ],
                 [
+                    {
+                        "name": "medida",
+                        "color": theme.INPUT,
+                        "data": "h_measured_db",
+                    },
+                    {
+                        "name": "inversa",
+                        "color": theme.FILTER,
+                        "data": "h_inverse_db",
+                    },
+                    {
+                        "name": "producto",
+                        "color": theme.OUTPUT,
+                        "data": "h_product_db",
+                    },
                     {
                         "name": "entrada",
                         "color": theme.INPUT,
@@ -314,6 +382,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.controls.weightingChanged.connect(self._on_weighting_changed)
         self.controls.spectrumStyleChanged.connect(self._on_spectrum_style_changed)
+        self.controls.thirdPlotChanged.connect(self._on_third_plot_changed)
         self.graphics.scene().sigMouseMoved.connect(self._on_mouse_moved)
 
     def _sync_from_engine(self) -> None:
@@ -326,9 +395,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.set_spl_offset(self.engine.spl_offset_db)
         self.controls.set_spl_calibration(self.engine.spl_offset_db)
         self.controls.set_weighting(self.engine.weighting)
+        self.controls.set_third_plot_mode(self._third_plot_mode)
         self.controls.set_calibration(
-            str(self.engine.calibration_path.name) if self.engine.calibration_path else None
+            str(self.engine.calibration_path.name) if self.engine.calibration_path else None,
+            synthetic=self.engine.calibration_synthetic,
         )
+        self._update_calibration_banner()
         self._rebuild_frequency_axis()
         self._update_input_display()
         self._update_total_level_label()
@@ -345,37 +417,40 @@ class MainWindow(QtWidgets.QMainWindow):
             self.engine.nyquist,
             self.engine.seconds_per_row,
         )
+        self._apply_frequency_axis_limits()
         if self._spectrum_style == "barras":
-            # El eje X usa indices de banda: se rehace el agrupado por bandas.
-            self._update_filter_curve()
             self._update_input_display()
+            self._apply_band_axis()
+        self._update_filter_curve()
+
+    def _apply_frequency_axis_limits(self) -> None:
+        """Applies shared frequency bounds after linked plots finish laying out."""
+        if self._spectrum_style == "barras":
             self._apply_band_axis()
             return
         lower, upper = self._frequency_axis_bounds()
-        # En modo log el ViewBox trabaja con log10(Hz), tambien en setLimits.
-        x_min, x_max = np.log10(lower), np.log10(upper)
+        # Los datos del eje se expresan en kHz; el ViewBox log trabaja en log10.
+        x_min, x_max = np.log10(lower / 1_000.0), np.log10(upper / 1_000.0)
         limits = {
-            "xMin": np.log10(lower),
-            "xMax": np.log10(max(float(self.engine.nyquist), lower)),
+            "xMin": np.log10(lower / 1_000.0),
+            "xMax": np.log10(max(float(self.engine.nyquist), lower) / 1_000.0),
             "yMin": DB_FLOOR,
             "yMax": DB_CEILING,
         }
-        for plot in (self.input_plot, self.output_plot):
+        for plot in (self.input_plot, self.output_plot, self.response_plot):
             plot.setMouseEnabled(x=False, y=False)
             plot.setLimits(**limits)
             plot.setXRange(x_min, x_max, padding=0)
         self._update_input_level_axis()
-        # La comparacion sigue el mismo eje X, sin pan ni zoom propios.
-        self.compare_plot.setMouseEnabled(x=False, y=False)
-        self._update_filter_curve()
+        self._position_response_message()
 
     def _frequency_axis_bounds(self) -> tuple[float, float]:
-        """Extremos visibles del eje X: desde el bin 1 (o 20 Hz) hasta 20 kHz."""
+        """Extremos visibles del eje X comunes a todos los espectros."""
         first_bin = (
             float(self._frequencies[1]) if self._frequencies.size > 1 else 20.0
         )
-        lower = max(20.0, first_bin)
-        upper = min(20_000.0, float(self.engine.nyquist))
+        lower = max(FREQUENCY_MIN_HZ, first_bin)
+        upper = min(FREQUENCY_MAX_HZ, float(self.engine.nyquist))
         return lower, max(upper, lower)
 
     def _update_filter_view_geometry(self) -> None:
@@ -412,22 +487,53 @@ class MainWindow(QtWidgets.QMainWindow):
             input_values = dbfs_to_spl(input_values, offset)
             input_unit = "dB SPL"
         if input_values.size == self._frequencies.size:
-            self.input_curve.setData(self._frequencies[1:], input_values[1:])
+            self.input_curve.setData(
+                self._frequencies[1:] / 1_000.0, input_values[1:]
+            )
         if self._output_db.size == self._frequencies.size:
             self.compare_output_curve.setData(
-                self._frequencies[1:], self._output_db[1:]
+                self._frequencies[1:] / 1_000.0, self._output_db[1:]
             )
         if self._input_db.size == self._frequencies.size:
             self.compare_input_curve.setData(
-                self._frequencies[1:], self._input_db[1:]
+                self._frequencies[1:] / 1_000.0, self._input_db[1:]
             )
 
-        spectra = {"entrada": input_values, "salida": self._output_db}
-        units = {"entrada": input_unit, "salida": "dBFS"}
+        spectra = {
+            "entrada": input_values,
+            "salida": self._output_db,
+            "filtro": self._filter_db,
+        }
+        units = {"entrada": input_unit, "salida": "dBFS", "filtro": "dB"}
         if input_unit != "dBFS":
             # La comparacion siempre muestra la entrada en dBFS.
             spectra["entrada_dbfs"] = self._input_db
             units["entrada_dbfs"] = "dBFS"
+        if self.engine.is_calibrated:
+            spectra.update(
+                {
+                    "h_measured_db": self._measured_db,
+                    "h_inverse_db": self._inverse_db,
+                    "h_product_db": self._product_db,
+                }
+            )
+            units.update(
+                {
+                    "h_measured_db": "dB",
+                    "h_inverse_db": "dB",
+                    "h_product_db": "dB",
+                }
+            )
+            frequency_range = self.engine.calibration_frequency_range_hz
+            if frequency_range is not None:
+                valid = (
+                    (self._frequencies >= frequency_range[0])
+                    & (self._frequencies <= frequency_range[1])
+                )
+                for key in ("h_measured_db", "h_inverse_db", "h_product_db"):
+                    values = spectra[key].copy()
+                    values[~valid] = np.nan
+                    spectra[key] = values
         names = {"entrada_dbfs": "entrada (dBFS)"} if "entrada_dbfs" in spectra else None
         self.readout.set_spectra(
             self._frequencies, spectra, units=units, names=names
@@ -437,6 +543,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_spectrum_style_changed(self, style: str) -> None:
         self._spectrum_style = style
         self._apply_spectrum_style()
+
+    def _on_third_plot_changed(self, mode: str) -> None:
+        self._third_plot_mode = mode
+        self._apply_third_plot_mode()
 
     def _apply_spectrum_style(self) -> None:
         """Alterna la presentacion de entrada y salida entre linea y barras."""
@@ -456,6 +566,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # El eje X de la comparacion no puede seguir indices de banda.
             self.compare_plot.setXLink(None)
             self.filter_view.setLogMode("x", False)
+            self.response_plot.setLogMode(x=False, y=False)
             for plot in (self.input_plot, self.output_plot):
                 plot.setLogMode(x=False, y=False)
             self._update_filter_curve()
@@ -472,36 +583,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.filter_band_curve.setVisible(False)
         self.readout_label.setText(self._readout_hint)
         self.filter_view.setLogMode("x", True)
-        for plot in (self.input_plot, self.output_plot):
+        self.response_plot.setLogMode(x=True, y=False)
+        for plot in (self.input_plot, self.output_plot, self.response_plot):
             plot.setLogMode(x=True, y=False)
             plot.getAxis("bottom").setTicks(None)
         self.compare_plot.setXLink(self.input_plot)
-        lower, upper = self._frequency_axis_bounds()
-        # En modo log el ViewBox trabaja con log10(Hz), tambien en setLimits.
-        x_min, x_max = np.log10(lower), np.log10(upper)
-        limits = {
-            "xMin": np.log10(lower),
-            "xMax": np.log10(max(float(self.engine.nyquist), lower)),
-            "yMin": DB_FLOOR,
-            "yMax": DB_CEILING,
-        }
-        for plot in (self.input_plot, self.output_plot):
-            plot.setMouseEnabled(x=False, y=False)
-            plot.setLimits(**limits)
-            plot.setXRange(x_min, x_max, padding=0)
-        self._update_input_level_axis()
+        self._apply_frequency_axis_limits()
+        self.output_plot.setXLink(self.input_plot)
+        self._position_response_message()
         self._update_filter_curve()
         self._update_input_display()
 
     def _apply_band_axis(self) -> None:
-        """Fija el eje X de entrada y salida en el indice de banda."""
+        """Fija las tres graficas en indices compartidos de banda."""
         band_max = float(max(self._band_centers.size - 1, 1))
-        for plot in (self.input_plot, self.output_plot):
+        for plot in (self.input_plot, self.output_plot, self.response_plot):
             plot.setMouseEnabled(x=False, y=False)
             plot.setLimits(
                 xMin=-1.0, xMax=band_max + 1.0, yMin=DB_FLOOR, yMax=DB_CEILING
             )
             plot.setXRange(-0.5, band_max + 0.5, padding=0)
+        self.response_plot.setLabel("bottom", "Banda de 1/3 de octava")
         self._update_input_level_axis()
 
     def _update_band_display(self) -> None:
@@ -529,6 +631,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.input_bars.setOpts(x=indices, y0=DB_FLOOR, y1=input_levels)
         self.output_bars.setOpts(x=indices, y0=DB_FLOOR, y1=output_levels)
         self.filter_band_curve.setData(indices, filter_levels)
+        self.compare_input_curve.setData(indices, input_levels)
+        self.compare_output_curve.setData(indices, output_levels)
         if filter_levels.size:
             lower = min(DB_FLOOR, float(np.min(filter_levels)) - 3.0)
             upper = max(6.0, float(np.max(filter_levels)) + 3.0)
@@ -543,6 +647,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 plot.getAxis("bottom").setTicks([ticks])
             # Las bandas cambian con Nyquist: reajusta el eje de indices.
             self._apply_band_axis()
+        self._update_response_curves()
 
     def _clear_band_display(self) -> None:
         """Vacia las barras mientras el espectro no tiene el tamano actual."""
@@ -582,6 +687,7 @@ class MainWindow(QtWidgets.QMainWindow):
         leaving_bypass = self.engine.bypass and not bypass
         self.engine.bypass = bypass
         self.engine.recompute_inverse()
+        self._update_filter_curve()
         self._update_mode_status()
         if leaving_bypass:
             self.statusBar().showMessage(
@@ -592,11 +698,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_gain_changed(self, db: float) -> None:
         self.engine.max_gain_db = db
         self.engine.recompute_inverse()
+        self._update_filter_curve()
         self._update_mode_status()
 
     def _on_epsilon_changed(self, value: float) -> None:
         self.engine.epsilon_base = value
         self.engine.recompute_inverse()
+        self._update_filter_curve()
         self._update_mode_status()
 
     def _on_spl_display_toggled(self, active: bool) -> None:
@@ -702,7 +810,10 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         coherence_path: Path | None = None
-        candidate = Path(path).with_name("medicion_gamma2.npy")
+        coherence_stem = Path(path).stem.replace("_H", "_gamma2")
+        if coherence_stem == Path(path).stem:
+            coherence_stem = f"{Path(path).stem}_gamma2"
+        candidate = Path(path).with_name(f"{coherence_stem}.npy")
         if candidate.exists():
             answer = QtWidgets.QMessageBox.question(
                 self,
@@ -718,13 +829,19 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "Calibracion invalida", str(error))
             return
 
-        self.controls.set_calibration(Path(path).name)
+        self.controls.set_calibration(
+            Path(path).name, synthetic=self.engine.calibration_synthetic
+        )
+        self._update_calibration_banner()
+        self._update_filter_curve()
         self._update_mode_status()
         self._set_status("Calibracion cargada")
 
     def _clear_calibration(self) -> None:
         self.engine.clear_calibration()
         self.controls.set_calibration(None)
+        self.calibration_banner.hide()
+        self._update_filter_curve()
         self._update_mode_status()
         self._set_status("Calibracion descartada")
 
@@ -743,6 +860,17 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         self.controls.set_status(text, state=state)
         self.controls.status_label.setToolTip(tip)
+
+    def _update_calibration_banner(self) -> None:
+        if not self.engine.is_calibrated:
+            self.calibration_banner.hide()
+            return
+        self.calibration_banner.setText(
+            "DATOS SINTÉTICOS"
+            if self.engine.calibration_synthetic
+            else "CALIBRACIÓN NO SINTÉTICA"
+        )
+        self.calibration_banner.show()
 
     # -------------------------------------------------------------- refresco
     def _refresh(self) -> None:
@@ -783,7 +911,9 @@ class MainWindow(QtWidgets.QMainWindow):
             spectrum_db(self._output_history, self.engine.fft_size),
         )
         # El bin 0 (DC) no existe en un eje logaritmico: log10(0) seria NaN.
-        self.output_curve.setData(self._frequencies[1:], self._output_db[1:])
+        self.output_curve.setData(
+            self._frequencies[1:] / 1_000.0, self._output_db[1:]
+        )
         self._update_filter_curve()
         self.spectrogram.push(self._output_db)
 
@@ -796,7 +926,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._has_input_total = True
         self._update_total_level_label()
-        self.meters.set_input(in_rms, in_peak)
+        self.meters.set_input(in_rms, in_peak, latest.input_would_clip)
         self.meters.set_output(out_rms, out_peak, latest.would_clip)
 
         if self._recorder is not None:
@@ -828,29 +958,170 @@ class MainWindow(QtWidgets.QMainWindow):
             # La linea del filtro por bandas se dibuja en _update_band_display.
             return
         if self._filter_db.size == self._frequencies.size:
-            self.filter_curve.setData(self._frequencies[1:], self._filter_db[1:])
+            self.filter_curve.setData(
+                self._frequencies[1:] / 1_000.0, self._filter_db[1:]
+            )
             lower = min(DB_FLOOR, float(np.min(self._filter_db)) - 3.0)
             upper = max(6.0, float(np.max(self._filter_db)) + 3.0)
             self.filter_view.setYRange(lower, upper, padding=0)
 
     def _update_response_curves(self) -> None:
-        """Dibuja |H| medida, |H^-1| aplicada y su producto en dB."""
+        """Dibuja curvas de calibracion solo si hay una medicion validada."""
+        h_response = self.engine.h_response
         h_inverse = self.engine.equalizer.h_inverse
         self._filter_db = gain_db(h_inverse)
-        inverse_db = self._filter_db
+        if h_response is None:
+            self._measured_db = np.zeros(0)
+            self._inverse_db = np.zeros(0)
+            self._product_db = np.zeros(0)
+            for curve in (
+                self.response_measured_curve,
+                self.response_inverse_curve,
+                self.response_product_curve,
+            ):
+                curve.setData([], [])
+            self._apply_third_plot_mode()
+            return
 
-        if self.engine.bypass or self.engine.h_response is None:
-            measured_db = np.zeros_like(inverse_db)
-            inverse_db = np.zeros_like(inverse_db)
-            product_db = np.zeros_like(inverse_db)
+        self._measured_db = gain_db(h_response)
+        self._inverse_db = gain_db(h_inverse)
+        self._product_db = gain_db(h_response * h_inverse)
+
+        valid = np.ones(self._frequencies.size, dtype=bool)
+        frequency_range = self.engine.calibration_frequency_range_hz
+        if frequency_range is not None:
+            valid = (
+                (self._frequencies >= frequency_range[0])
+                & (self._frequencies <= frequency_range[1])
+            )
+        valid &= self._frequencies > 0.0
+        if self._spectrum_style == "linea":
+            x_values = self._frequencies[valid] / 1_000.0
+            levels = (
+                self._measured_db[valid],
+                self._inverse_db[valid],
+                self._product_db[valid],
+            )
+            self.response_plot.setLabel("bottom", "Frecuencia", units="kHz")
         else:
-            measured_db = gain_db(self.engine.h_response)
-            product_db = gain_db(self.engine.h_response * h_inverse)
+            measured_spectrum = self._measured_db.copy()
+            inverse_spectrum = self._inverse_db.copy()
+            product_spectrum = self._product_db.copy()
+            if frequency_range is not None:
+                valid = (
+                    (self._frequencies >= frequency_range[0])
+                    & (self._frequencies <= frequency_range[1])
+                )
+                measured_spectrum[~valid] = DB_FLOOR
+                inverse_spectrum[~valid] = DB_FLOOR
+                product_spectrum[~valid] = DB_FLOOR
+            centers, measured = third_octave_bands(
+                measured_spectrum, self._frequencies
+            )
+            _centers, inverse = third_octave_bands(
+                inverse_spectrum, self._frequencies
+            )
+            _centers, product = third_octave_bands(
+                product_spectrum, self._frequencies
+            )
+            if frequency_range is not None:
+                valid_centers = (
+                    (centers >= frequency_range[0])
+                    & (centers <= frequency_range[1])
+                )
+                centers = centers[valid_centers]
+                measured = measured[valid_centers]
+                inverse = inverse[valid_centers]
+                product = product[valid_centers]
+            x_values = np.arange(centers.size, dtype=np.float64)
+            levels = (measured, inverse, product)
+            ticks = [
+                (float(index), f"{center:g}")
+                for index, center in enumerate(centers)
+            ]
+            self.response_plot.getAxis("bottom").setTicks([ticks])
+            self.response_plot.setLabel("bottom", "Banda de 1/3 de octava")
 
-        # Se conservan para el CSV aunque la tercera grafica sea la comparacion.
-        self._measured_db = measured_db
-        self._inverse_db = inverse_db
-        self._product_db = product_db
+        self.response_measured_curve.setData(x_values, levels[0])
+        self.response_inverse_curve.setData(x_values, levels[1])
+        self.response_product_curve.setData(x_values, levels[2])
+        nonempty = [values for values in levels if values.size]
+        if nonempty:
+            all_values = np.concatenate(nonempty)
+            self.response_plot.setYRange(
+                min(-60.0, float(np.min(all_values)) - 3.0),
+                max(6.0, float(np.max(all_values)) + 3.0),
+                padding=0,
+            )
+        self._apply_third_plot_mode()
+
+    def _position_response_message(self) -> None:
+        x_range, y_range = self.response_plot.viewRange()
+        self.response_message.setPos(
+            (x_range[0] + x_range[1]) / 2.0,
+            (y_range[0] + y_range[1]) / 2.0,
+        )
+
+    def _apply_third_plot_mode(self) -> None:
+        """Shows filter response by default; comparison remains selectable."""
+        response_mode = self._third_plot_mode == "respuesta"
+        calibrated = self.engine.is_calibrated
+        title = (
+            "Respuesta del filtro"
+            if response_mode
+            else "Comparacion entrada/salida"
+        )
+        if response_mode and calibrated:
+            provenance = (
+                "DATOS SINTÉTICOS"
+                if self.engine.calibration_synthetic
+                else "CALIBRACIÓN NO SINTÉTICA"
+            )
+            title = f"{title} · {provenance}"
+        self.response_plot.setTitle(title, color=theme.TEXT, size="10pt")
+        self.response_plot.setLabel(
+            "left", "Magnitud", units="dB" if response_mode else "dBFS"
+        )
+        self.response_zero_line.setVisible(response_mode)
+        self.response_message.setVisible(response_mode and not calibrated)
+        self.response_measured_curve.setVisible(response_mode and calibrated)
+        self.response_inverse_curve.setVisible(response_mode and calibrated)
+        self.response_product_curve.setVisible(response_mode and calibrated)
+        self.compare_input_curve.setVisible(not response_mode)
+        self.compare_output_curve.setVisible(not response_mode)
+        self.readout.set_enabled(
+            self.response_plot, {"entrada", "salida"}, not response_mode
+        )
+        self.readout.set_enabled(
+            self.response_plot,
+            {"medida", "inversa", "producto"},
+            response_mode and calibrated,
+        )
+
+        if response_mode:
+            self.response_legend.setVisible(calibrated)
+            if calibrated:
+                frequency_range = self.engine.calibration_frequency_range_hz
+                range_label = ""
+                if frequency_range is not None:
+                    range_label = (
+                        f" · rango {frequency_range[0]:g}–"
+                        f"{frequency_range[1]:g} Hz"
+                    )
+                self.response_legend.setText(
+                    f'<span style="color:{theme.INPUT}">|H| medida</span> &nbsp;'
+                    f'<span style="color:{theme.FILTER}">|H⁻¹| inversa</span> &nbsp;'
+                    f'<span style="color:{theme.OUTPUT}">|H·H⁻¹| producto</span>'
+                    f"{range_label}"
+                )
+        else:
+            self.response_legend.setText(
+                f'<span style="color:{theme.INPUT}">Entrada</span> &nbsp;'
+                f'<span style="color:{theme.OUTPUT}">Salida</span>'
+            )
+            self.response_legend.show()
+            self.response_plot.setYRange(DB_FLOOR, DB_CEILING, padding=0)
+        self._position_response_message()
 
     # --------------------------------------------------------------- sesion
     def _on_record_toggled(self, recording: bool) -> None:
@@ -927,19 +1198,40 @@ class MainWindow(QtWidgets.QMainWindow):
                 return values
             return np.full(bins, fallback, dtype=np.float64)
 
+        has_calibration = self.engine.is_calibrated
         columns = {
             "input_db": column(self._input_db, DB_FLOOR),
             "output_db": column(self._output_db, DB_FLOOR),
-            "h_measured_db": column(self._measured_db, 0.0),
-            "h_inverse_db": column(self._inverse_db, 0.0),
-            "h_product_db": column(self._product_db, 0.0),
+            "h_measured_db": (
+                column(self._measured_db, 0.0) if has_calibration else None
+            ),
+            "h_inverse_db": (
+                column(self._inverse_db, 0.0) if has_calibration else None
+            ),
+            "h_product_db": (
+                column(self._product_db, 0.0) if has_calibration else None
+            ),
         }
+        provenance = (
+            "DATOS SINTÉTICOS"
+            if self.engine.calibration_synthetic
+            else             "MEDICIÓN NO SINTÉTICA"
+            if has_calibration
+            else "SIN CALIBRACIÓN"
+        )
         with path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle)
-            writer.writerow(("frequency_hz", *columns.keys()))
+            writer.writerow(("frequency_hz", *columns.keys(), "provenance"))
             for index, frequency in enumerate(self._frequencies):
                 writer.writerow(
-                    (float(frequency), *(float(values[index]) for values in columns.values()))
+                    (
+                        float(frequency),
+                        *(
+                            "" if values is None else float(values[index])
+                            for values in columns.values()
+                        ),
+                        provenance,
+                    )
                 )
 
     def _on_mouse_moved(self, position: QtCore.QPointF) -> None:

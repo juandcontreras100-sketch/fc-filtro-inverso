@@ -6,11 +6,18 @@ from typing import Any
 
 from PySide6 import QtCore, QtWidgets
 
+from src.config import (
+    DEFAULT_EPSILON_RATIO,
+    DEFAULT_MAX_GAIN_DB,
+    MAX_CONFIGURABLE_GAIN_DB,
+    SUPPORTED_FFT_SIZES_SAMPLES,
+    SUPPORTED_SAMPLE_RATES_HZ,
+)
 from src.ui import theme
 
-SAMPLE_RATES = (44_100.0, 48_000.0, 96_000.0)
-FFT_SIZES = (512, 1024, 2048, 4096)
-MAX_GAIN_DB = 30.0
+SAMPLE_RATES = SUPPORTED_SAMPLE_RATES_HZ
+FFT_SIZES = SUPPORTED_FFT_SIZES_SAMPLES
+MAX_GAIN_DB = MAX_CONFIGURABLE_GAIN_DB
 
 
 class ControlPanel(QtWidgets.QWidget):
@@ -30,6 +37,7 @@ class ControlPanel(QtWidgets.QWidget):
     splOffsetChanged = QtCore.Signal(float)
     weightingChanged = QtCore.Signal(str)
     spectrumStyleChanged = QtCore.Signal(str)
+    thirdPlotChanged = QtCore.Signal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -38,13 +46,13 @@ class ControlPanel(QtWidgets.QWidget):
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(4, 2, 4, 4)
-        root.setSpacing(5)
+        root.setSpacing(8)
 
         root.addWidget(self._build_mode_group())
         root.addWidget(self._build_calibration_group())
         root.addWidget(self._build_filter_group())
-        root.addWidget(self._build_stream_group())
         root.addWidget(self._build_spl_group())
+        root.addWidget(self._build_stream_group())
         root.addWidget(self._build_view_group())
         root.addStretch(1)
         # La ventana lo ancla fuera del scroll para que Grabar/Exportar no se pierdan.
@@ -110,7 +118,7 @@ class ControlPanel(QtWidgets.QWidget):
 
         self.gain_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.gain_slider.setRange(0, int(MAX_GAIN_DB))
-        self.gain_slider.setValue(12)
+        self.gain_slider.setValue(int(DEFAULT_MAX_GAIN_DB))
         self.gain_slider.setToolTip("Ganancia maxima permitida en las muescas")
         self.gain_slider.valueChanged.connect(self._on_gain_changed)
 
@@ -134,16 +142,17 @@ class ControlPanel(QtWidgets.QWidget):
         self.epsilon_spin.setRange(0.0001, 0.5)
         self.epsilon_spin.setDecimals(4)
         self.epsilon_spin.setSingleStep(0.005)
-        self.epsilon_spin.setValue(0.02)
+        self.epsilon_spin.setValue(DEFAULT_EPSILON_RATIO)
         self.epsilon_spin.setToolTip(
-            "Regularizacion de Tikhonov: valores altos suavizan el filtro"
+            "ε es una razon adimensional aplicada a la potencia de referencia "
+            "|H|²; valores mayores suavizan el filtro."
         )
         self.epsilon_spin.valueChanged.connect(self._on_epsilon_changed)
         form.addRow("Estabilidad (e)", self.epsilon_spin)
         return box
 
     def _build_spl_group(self) -> QtWidgets.QGroupBox:
-        box, form = self._group("5. Entrada SPL")
+        box, form = self._group("4. Entrada SPL")
 
         self.spl_calibration_button = QtWidgets.QPushButton("Calibrar SPL...")
         self.spl_calibration_button.setToolTip("Medir la entrada para calibrar dB SPL")
@@ -171,11 +180,12 @@ class ControlPanel(QtWidgets.QWidget):
             "Offset obtenido con un calibrador de 94 dB SPL o un sonometro"
         )
         self.spl_offset_spin.valueChanged.connect(self._on_spl_offset_changed)
-        form.addRow("Offset", self.spl_offset_spin)
+        form.addRow("Offset (dB)", self.spl_offset_spin)
 
         self.weighting_combo = QtWidgets.QComboBox()
         self.weighting_combo.addItem("Z (sin ponderacion)", "Z")
         self.weighting_combo.addItem("A (respuesta auditiva)", "A")
+        self.weighting_combo.addItem("C (ponderacion C)", "C")
         self.weighting_combo.setToolTip("Ponderacion del nivel total de entrada")
         self.weighting_combo.currentIndexChanged.connect(self._on_weighting_changed)
         form.addRow("Ponderacion", self.weighting_combo)
@@ -194,7 +204,7 @@ class ControlPanel(QtWidgets.QWidget):
         return box
 
     def _build_stream_group(self) -> QtWidgets.QGroupBox:
-        box, form = self._group("4. Dispositivo")
+        box, form = self._group("5. Dispositivo")
 
         self.device_combo = QtWidgets.QComboBox()
         self.device_combo.currentIndexChanged.connect(self._on_device_changed)
@@ -257,6 +267,16 @@ class ControlPanel(QtWidgets.QWidget):
             self._on_spectrum_style_changed
         )
         form.addRow("Espectro", self.spectrum_combo)
+
+        self.third_plot_combo = QtWidgets.QComboBox()
+        self.third_plot_combo.addItem("Respuesta del filtro", "respuesta")
+        self.third_plot_combo.addItem(
+            "Comparacion entrada/salida", "comparacion"
+        )
+        self.third_plot_combo.currentIndexChanged.connect(
+            self._on_third_plot_changed
+        )
+        form.addRow("Grafica inferior", self.third_plot_combo)
         return box
 
     # ------------------------------------------------------------- estados
@@ -357,8 +377,26 @@ class ControlPanel(QtWidgets.QWidget):
         finally:
             self._building = False
 
-    def set_calibration(self, path: str | None) -> None:
-        self.calibration_label.setText(path or "—")
+    def set_third_plot_mode(self, mode: str) -> None:
+        self._building = True
+        try:
+            index = self.third_plot_combo.findData(mode)
+            if index >= 0:
+                self.third_plot_combo.setCurrentIndex(index)
+        finally:
+            self._building = False
+
+    def set_calibration(self, path: str | None, *, synthetic: bool = False) -> None:
+        if path is None:
+            self.calibration_label.setText("—")
+        elif synthetic:
+            self.calibration_label.setText(f"{path}\nDATOS SINTÉTICOS")
+            self.calibration_label.setStyleSheet(
+                f"color: {theme.WARNING}; font-weight: 700;"
+            )
+        else:
+            self.calibration_label.setText(path)
+            self.calibration_label.setStyleSheet(f"color: {theme.MUTED};")
         self.clear_button.setEnabled(path is not None)
 
     def set_status(self, text: str, state: str | None = None) -> None:
@@ -434,6 +472,11 @@ class ControlPanel(QtWidgets.QWidget):
         if self._building:
             return
         self.spectrumStyleChanged.emit(str(self.spectrum_combo.currentData()))
+
+    def _on_third_plot_changed(self, _index: int) -> None:
+        if self._building:
+            return
+        self.thirdPlotChanged.emit(str(self.third_plot_combo.currentData()))
 
     def _on_record_toggled(self, recording: bool) -> None:
         self.record_button.setText("Detener" if recording else "Grabar")

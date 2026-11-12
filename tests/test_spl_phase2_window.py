@@ -59,7 +59,12 @@ class SplPhase2WindowTests(unittest.TestCase):
         self.window.controls.splOffsetChanged.connect(offset_events.append)
         self.window.controls.splDisplayToggled.connect(display_events.append)
 
-        self.window.controls.spl_calibration_button.click()
+        # La ventana tambien abre el asistente modal al recibir esta senal;
+        # se aisla porque esta prueba solo verifica el panel de control.
+        with mock.patch.object(
+            window_module, "CalibrationDialog", create=True
+        ):
+            self.window.controls.spl_calibration_button.click()
         self.window.controls.set_spl_calibration(94.0)
 
         self.assertEqual(requests, [True])

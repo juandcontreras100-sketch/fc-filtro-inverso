@@ -48,24 +48,29 @@ class MainWindowPlotLimitsTests(unittest.TestCase):
         ):
             with self.subTest(plot=plot.titleLabel.text):
                 x_range, y_range = plot.viewRange()
-                # El eje X es logaritmico: viewRange devuelve log10(Hz).
-                self.assertAlmostEqual(10 ** x_range[0], first_bin, places=6)
+                # El eje usa kHz y viewRange devuelve log10(kHz).
                 self.assertAlmostEqual(
-                    10 ** x_range[1], self.engine.nyquist, places=6
+                    10 ** x_range[0], first_bin / 1_000.0, places=6
                 )
-                self.assertAlmostEqual(y_range[0], DB_FLOOR, places=6)
-                self.assertAlmostEqual(y_range[1], DB_CEILING, places=6)
+                self.assertAlmostEqual(
+                    10 ** x_range[1], self.engine.nyquist / 1_000.0, places=6
+                )
+                if plot is not self.window.response_plot:
+                    self.assertAlmostEqual(y_range[0], DB_FLOOR, places=6)
+                    self.assertAlmostEqual(y_range[1], DB_CEILING, places=6)
 
     def test_plots_keep_the_20_hz_minimum_when_the_first_bin_is_lower(self):
         engine = AudioEngine(sample_rate=192_000.0, fft_size=16_384)
         window = MainWindow(engine)
         self.addCleanup(window.close)
+        window.show()
+        self.app.processEvents()
         self.assertLess(engine.sample_rate / engine.fft_size, 20.0)
 
         for plot in (window.input_plot, window.output_plot):
             with self.subTest(plot=plot.titleLabel.text):
                 x_min = plot.viewRange()[0][0]
-                self.assertAlmostEqual(10 ** x_min, 20.0, places=6)
+                self.assertAlmostEqual(10 ** x_min, 0.020, places=6)
 
     def test_graphs_have_no_padding_and_tight_margins(self):
         layout = self.window.graphics.ci.layout
@@ -87,8 +92,10 @@ class MainWindowPlotLimitsTests(unittest.TestCase):
     def test_spectrogram_starts_at_the_first_bin(self):
         x_min, x_max = self.window.spectrogram.plot.viewRange()[0]
 
-        self.assertAlmostEqual(x_min, self.engine.sample_rate / self.engine.fft_size)
-        self.assertAlmostEqual(x_max, self.engine.nyquist)
+        self.assertAlmostEqual(
+            x_min, self.engine.sample_rate / self.engine.fft_size / 1_000.0
+        )
+        self.assertAlmostEqual(x_max, self.engine.nyquist / 1_000.0)
 
     def test_spectrum_curves_skip_the_dc_bin(self):
         hop_size = self.engine.hop_size
@@ -105,7 +112,7 @@ class MainWindowPlotLimitsTests(unittest.TestCase):
 
         self.window._refresh()
 
-        expected_frequencies = self.window._frequencies[1:]
+        expected_frequencies = self.window._frequencies[1:] / 1_000.0
         for curve in (self.window.input_curve, self.window.output_curve):
             frequencies, _values = curve.getOriginalDataset()
             self.assertGreater(float(frequencies[0]), 0.0)

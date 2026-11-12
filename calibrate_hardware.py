@@ -10,17 +10,24 @@ Ejemplo:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
 
 import numpy as np
 
+from src.config import DEFAULT_FFT_SIZE_SAMPLES, DEFAULT_SAMPLE_RATE_HZ
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Calibración H(f) por Log Sine Sweep")
-    parser.add_argument("--sample-rate", type=float, default=48_000.0)
-    parser.add_argument("--fft-size", type=int, default=2_048, help="debe coincidir con main.py")
+    parser.add_argument("--sample-rate", type=float, default=DEFAULT_SAMPLE_RATE_HZ)
+    parser.add_argument(
+        "--fft-size",
+        type=int,
+        default=DEFAULT_FFT_SIZE_SAMPLES,
+        help="debe coincidir con main.py",
+    )
     parser.add_argument("--duration", type=float, default=5.0, help="duración del sweep en segundos")
     parser.add_argument("--start-freq", type=float, default=20.0)
     parser.add_argument("--stop-freq", type=float, default=20_000.0)
@@ -381,8 +388,25 @@ def main() -> int:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.save(args.output, h_response)
-    coherence_path = args.output.with_name("medicion_gamma2.npy")
+    coherence_stem = args.output.stem.replace("_H", "_gamma2")
+    if coherence_stem == args.output.stem:
+        coherence_stem = f"{args.output.stem}_gamma2"
+    coherence_path = args.output.with_name(f"{coherence_stem}.npy")
     np.save(coherence_path, coherence)
+    args.output.with_suffix(".json").write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "sample_rate_hz": args.sample_rate,
+                "fft_size_samples": args.fft_size,
+                "frequency_range_hz": [args.start_freq, args.stop_freq],
+                "synthetic": False,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     for sweep_index, start_sample in enumerate(starts, start=1):
         print(
             f"Barrido {sweep_index} alineado en la muestra {start_sample} "

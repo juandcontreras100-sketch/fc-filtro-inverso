@@ -8,8 +8,8 @@ import pyqtgraph as pg
 
 from src.audio.engine import AudioEngine
 from src.storage.profiles import UserProfile
-from src.ui import theme
-from src.ui.window import MainWindow
+from src.ui import theme, window as window_module
+from src.ui.window import AXIS_WIDTH, MainWindow
 
 
 class MainWindowTests(unittest.TestCase):
@@ -42,6 +42,39 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(
             self.window.windowTitle(), "Ecualizador FFT en tiempo real"
         )
+
+    def test_the_three_plots_share_axis_widths_to_align_their_titles(self):
+        self.window.show()
+        self.window.resize(1_200, 800)
+        self.app.processEvents()
+
+        plots = (
+            self.window.input_plot,
+            self.window.output_plot,
+            self.window.compare_plot,
+        )
+        for plot in plots:
+            with self.subTest(plot=plot.titleLabel.text):
+                self.assertEqual(plot.getAxis("left").width(), AXIS_WIDTH)
+                self.assertEqual(plot.getAxis("right").width(), AXIS_WIDTH)
+                self.assertTrue(plot.getAxis("right").isVisible())
+
+        boxes = [plot.getViewBox().sceneBoundingRect() for plot in plots]
+        self.assertEqual(len({round(box.width(), 1) for box in boxes}), 1)
+        self.assertEqual(len({round(box.left(), 1) for box in boxes}), 1)
+
+    def test_unused_right_axes_are_visible_but_empty(self):
+        for plot in (self.window.input_plot, self.window.compare_plot):
+            right = plot.getAxis("right")
+            self.assertTrue(right.isVisible())
+            self.assertFalse(right.style["showValues"])
+            self.assertEqual(right.labelText, "")
+
+    def test_group_boxes_leave_room_for_their_titles(self):
+        qss = theme.stylesheet()
+
+        self.assertIn("margin-top: 16px;", qss)
+        self.assertIn("padding: 14px 6px 6px 6px;", qss)
 
     def test_filter_curve_uses_a_right_axis_in_db_gain(self):
         right_axis = self.window.output_plot.getAxis("right")
@@ -83,19 +116,29 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(font.fixedPitch())
         self.assertTrue(self.window.styleSheet())
 
-    def test_the_third_plot_compares_input_and_output_in_dbfs(self):
-        compare = self.window.compare_plot
+    def test_the_third_plot_defaults_to_filter_response(self):
+        response = self.window.response_plot
 
-        self.assertTrue(compare.ctrl.logXCheck.isChecked())
+        self.assertTrue(response.ctrl.logXCheck.isChecked())
         self.assertIs(
-            compare.getViewBox().linkedView(compare.getViewBox().XAxis),
+            response.getViewBox().linkedView(response.getViewBox().XAxis),
             self.window.input_plot.getViewBox(),
         )
-        self.assertEqual(compare.getAxis("left").labelUnits, "dBFS")
-        self.assertIsNotNone(compare.legend)
+        self.assertEqual(response.getAxis("left").labelUnits, "dB")
+        self.assertTrue(self.window.response_message.isVisible())
+        self.assertFalse(self.window.compare_input_curve.isVisible())
+
+    def test_comparison_mode_shows_input_and_output_in_dbfs(self):
+        combo = self.window.controls.third_plot_combo
+        combo.setCurrentIndex(combo.findData("comparacion"))
+
+        self.assertEqual(self.window.response_plot.getAxis("left").labelUnits, "dBFS")
+        self.assertTrue(self.window.compare_input_curve.isVisible())
+        self.assertTrue(self.window.compare_output_curve.isVisible())
+        self.assertFalse(self.window.response_message.isVisible())
         self.assertEqual(
-            [label.text for _sample, label in compare.legend.items],
-            ["Entrada", "Salida"],
+            self.window.response_plot.titleLabel.text,
+            "Comparacion entrada/salida",
         )
 
     def test_readout_covers_all_three_frequency_plots_with_monospace_font(self):

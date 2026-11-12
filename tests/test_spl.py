@@ -82,7 +82,7 @@ class SplSpectrumTests(unittest.TestCase):
 
     def test_unknown_weighting_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "weighting"):
-            total_level_db(np.ones(16), weighting="C")
+            total_level_db(np.ones(16), weighting="Q")
 
 
 class SplEngineStateTests(unittest.TestCase):

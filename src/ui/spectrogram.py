@@ -12,8 +12,15 @@ import pyqtgraph as pg
 
 from src.ui import theme
 
-DB_FLOOR = -120.0
-DB_CEILING = 6.0
+from src.config import (
+    DBFS_CEILING_DB,
+    DBFS_FLOOR_DB,
+    FREQUENCY_MAX_HZ,
+    FREQUENCY_MIN_HZ,
+)
+
+DB_FLOOR = DBFS_FLOOR_DB
+DB_CEILING = DBFS_CEILING_DB
 
 
 class SpectrogramWidget(pg.GraphicsLayoutWidget):
@@ -38,7 +45,7 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
         self.plot = self.addPlot()
         self.plot.getViewBox().setDefaultPadding(0.0)
         theme.style_plot(self.plot, "Cascada de la salida (abajo = mas reciente)")
-        self.plot.setLabel("bottom", "Frecuencia", units="Hz")
+        self.plot.setLabel("bottom", "Frecuencia lineal", units="kHz")
         self.plot.setLabel("left", "Tiempo hacia atras", units="s")
         self.plot.setMouseEnabled(x=False, y=False)
         self.plot.addItem(self._image)
@@ -49,6 +56,7 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
             values=(DB_FLOOR, DB_CEILING),
             limits=(DB_FLOOR, DB_CEILING),
         )
+        self._colorbar.setLabel("right", "Nivel", units="dBFS")
         self._colorbar.setMaximumWidth(70)
 
     # --------------------------------------------------------------- formato
@@ -68,14 +76,18 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
         self._buffer = np.full((self._rows, bins), db_floor, dtype=np.float32)
 
         self._image.setLevels(self._levels)
-        self._image.setRect(0.0, 0.0, nyquist, self._rows * self._seconds_per_row)
+        nyquist_khz = nyquist / 1_000.0
+        self._image.setRect(
+            0.0, 0.0, nyquist_khz, self._rows * self._seconds_per_row
+        )
         self._image.setImage(self._buffer, axisOrder="row-major", levels=self._levels)
 
         # Igual que las graficas de espectro: el eje arranca en el bin 1 para
         # no dejar un hueco vacio entre 0 Hz y el primer dato representable.
         first_bin = nyquist / max(bins - 1, 1)
-        lower = min(max(20.0, first_bin), nyquist)
-        self.plot.setXRange(lower, nyquist, padding=0)
+        lower = max(FREQUENCY_MIN_HZ, first_bin)
+        upper = min(FREQUENCY_MAX_HZ, nyquist)
+        self.plot.setXRange(lower / 1_000.0, upper / 1_000.0, padding=0)
         self.plot.setYRange(0.0, self._rows * self._seconds_per_row, padding=0)
 
     # ----------------------------------------------------------------- datos

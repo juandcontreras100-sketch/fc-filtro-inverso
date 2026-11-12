@@ -6,6 +6,7 @@ import time
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from src.config import CLIP_HOLD_SECONDS
 from src.dsp.spectrum import CLIP_DB
 from src.ui import theme
 
@@ -99,13 +100,18 @@ class LevelMeter(QtWidgets.QWidget):
 
 
 class ClipIndicator(QtWidgets.QWidget):
-    """LED que se enciende cuando la salida alcanza saturacion."""
+    """LED que retiene el indicador de saturacion durante un breve intervalo."""
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self,
+        label: str = "CLIP",
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._label = label
         self._hot = False
         self._release_at = 0.0
-        self.setFixedSize(78, 20)
+        self.setFixedSize(82, 20)
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(120)
         self._timer.timeout.connect(self._tick)
@@ -113,7 +119,7 @@ class ClipIndicator(QtWidgets.QWidget):
 
     def trigger(self) -> None:
         self._hot = True
-        self._release_at = time.monotonic() + 1.5
+        self._release_at = time.monotonic() + CLIP_HOLD_SECONDS
         self.update()
 
     def _tick(self) -> None:
@@ -143,7 +149,7 @@ class ClipIndicator(QtWidgets.QWidget):
         painter.drawText(
             QtCore.QRectF(rect.left() + 20, rect.top(), rect.width() - 22, rect.height()),
             QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
-            "CLIP",
+            self._label,
         )
 
 
@@ -165,7 +171,10 @@ class MeterPanel(QtWidgets.QWidget):
         self.clip = ClipIndicator()
         header.addWidget(title)
         header.addStretch(1)
-        header.addWidget(self.clip)
+        self.input_clip = ClipIndicator("IN CLIP")
+        self.output_clip = ClipIndicator("OUT CLIP")
+        header.addWidget(self.input_clip)
+        header.addWidget(self.output_clip)
         layout.addLayout(header)
 
         self.input_meter = LevelMeter("Entrada", theme.INPUT)
@@ -173,10 +182,14 @@ class MeterPanel(QtWidgets.QWidget):
         layout.addWidget(self.input_meter)
         layout.addWidget(self.output_meter)
 
-    def set_input(self, rms_db: float, peak_db: float) -> None:
+    def set_input(
+        self, rms_db: float, peak_db: float, would_clip: bool = False
+    ) -> None:
         self.input_meter.set_levels(rms_db, peak_db)
+        if would_clip or peak_db >= CLIP_DB:
+            self.input_clip.trigger()
 
     def set_output(self, rms_db: float, peak_db: float, would_clip: bool = False) -> None:
         self.output_meter.set_levels(rms_db, peak_db)
         if would_clip or peak_db >= CLIP_DB:
-            self.clip.trigger()
+            self.output_clip.trigger()

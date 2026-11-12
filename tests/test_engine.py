@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 from unittest import mock
 from unittest.mock import patch
@@ -15,10 +16,32 @@ class AudioEngineTests(unittest.TestCase):
         self.engine = AudioEngine(sample_rate=48_000.0, fft_size=512)
         self.bins = self.engine.bin_count
 
-    def _write_measurement(self, bins: int, name: str = "medicion_H.npy") -> Path:
+    def _write_measurement(
+        self,
+        bins: int,
+        name: str = "medicion_H.npy",
+        response: np.ndarray | None = None,
+    ) -> Path:
         folder = Path(tempfile.mkdtemp())
         path = folder / name
-        np.save(path, np.ones(bins, dtype=np.complex128))
+        values = np.ones(bins, dtype=np.complex128) if response is None else response
+        np.save(path, values)
+        coherence_stem = path.stem.replace("_H", "_gamma2")
+        if coherence_stem == path.stem:
+            coherence_stem = f"{path.stem}_gamma2"
+        np.save(path.with_name(f"{coherence_stem}.npy"), np.ones(bins))
+        path.with_suffix(".json").write_text(
+            json.dumps(
+                {
+                    "format_version": 1,
+                    "sample_rate_hz": self.engine.sample_rate,
+                    "fft_size_samples": self.engine.fft_size,
+                    "frequency_range_hz": [20.0, 20_000.0],
+                    "synthetic": False,
+                }
+            ),
+            encoding="utf-8",
+        )
         return path
 
     def test_engine_starts_flat_and_in_bypass(self):
@@ -55,11 +78,9 @@ class AudioEngineTests(unittest.TestCase):
         self.assertTrue(np.allclose(self.engine.equalizer.h_inverse, 1.0))
 
     def test_the_inverse_compensates_a_notch(self):
-        folder = Path(tempfile.mkdtemp())
-        path = folder / "medicion_H.npy"
         h = np.ones(self.bins, dtype=np.complex128)
         h[64] = 0.1  # notch profundo
-        np.save(path, h)
+        path = self._write_measurement(self.bins, response=h)
 
         self.engine.load_calibration(path)
         self.engine.bypass = False
@@ -71,11 +92,9 @@ class AudioEngineTests(unittest.TestCase):
         self.assertLessEqual(gain, 10.0 ** (18.0 / 20.0) + 1e-9)
 
     def test_even_a_huge_out_of_band_peak_does_not_collapse_the_filter(self):
-        folder = Path(tempfile.mkdtemp())
-        path = folder / "medicion_H.npy"
         h = np.ones(self.bins, dtype=np.complex128)
         h[-1] = 100.0  # artefacto ultrasónico en Nyquist
-        np.save(path, h)
+        path = self._write_measurement(self.bins, response=h)
 
         self.engine.load_calibration(path)
         self.engine.bypass = False
@@ -210,7 +229,26 @@ class AudioEngineTests(unittest.TestCase):
         self.assertLessEqual(float(np.max(np.abs(output))), 0.980001)
         frame = self.engine.display_queue.get_nowait()
         self.assertTrue(frame.would_clip)
+        self.assertFalse(frame.input_would_clip)
         self.assertGreater(float(np.max(np.abs(frame.output_samples))), 1.0)
+
+    def test_callback_tracks_input_clipping_separately_from_output(self):
+        hop_size = self.engine.hop_size
+        input_block = np.full((hop_size, 1), 1.0, dtype=np.float32)
+        output = np.zeros((hop_size, 1), dtype=np.float32)
+        filtered_block = np.full(hop_size, 0.25, dtype=np.float64)
+
+        with patch.object(
+            self.engine.equalizer, "process_block", return_value=filtered_block
+        ):
+            self.engine._callback(input_block, output, hop_size, None, None)
+            self.engine.display_queue.get_nowait()
+            input_block.fill(0.0)
+            self.engine._callback(input_block, output, hop_size, None, None)
+
+        frame = self.engine.display_queue.get_nowait()
+        self.assertTrue(frame.input_would_clip)
+        self.assertFalse(frame.would_clip)
 
     def test_callback_pairs_wola_output_with_the_input_hop_that_produced_it(self):
         hop_size = self.engine.hop_size

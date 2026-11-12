@@ -231,6 +231,13 @@ class SessionRecorder:
             "calibration_file": (
                 None if calibration is None else Path(calibration).name
             ),
+            "calibration_provenance": (
+                "synthetic"
+                if bool(getattr(self.engine, "calibration_synthetic", False))
+                else "measured"
+                if calibration is not None
+                else "none"
+            ),
             "mode": "bypass" if bool(self.engine.bypass) else "ecualizado",
             "usuario": (
                 None

@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import numpy as np
 
-DB_FLOOR = -120.0
-DB_CEILING = 6.0
-CLIP_DB = -0.1
-CLIP_THRESHOLD = 10.0 ** (CLIP_DB / 20.0)
+from src.config import (
+    CLIP_THRESHOLD_LINEAR,
+    DBFS_CEILING_DB,
+    DBFS_FLOOR_DB,
+    DEFAULT_SAMPLE_RATE_HZ,
+)
+
+DB_FLOOR = DBFS_FLOOR_DB
+DB_CEILING = DBFS_CEILING_DB
+CLIP_THRESHOLD = CLIP_THRESHOLD_LINEAR
+CLIP_DB = 20.0 * np.log10(CLIP_THRESHOLD)
 
 # Centros nominales ISO 266 de 25 Hz a 20 kHz.
 _THIRD_OCTAVE_CENTERS_HZ = np.array(
@@ -32,6 +39,8 @@ def dbfs_to_spl(
 def a_weighting_db(frequencies_hz: float | np.ndarray) -> float | np.ndarray:
     """Ponderacion A de IEC 61672, normalizada a 0 dB en 1 kHz."""
     frequencies = np.asarray(frequencies_hz, dtype=np.float64)
+    if not np.all(np.isfinite(frequencies)) or np.any(frequencies < 0.0):
+        raise ValueError("frequencies_hz debe ser finita y no negativa")
     frequency_2 = np.square(frequencies)
     frequency_4 = np.square(frequency_2)
     reference_2 = 1_000.0**2
@@ -49,23 +58,67 @@ def a_weighting_db(frequencies_hz: float | np.ndarray) -> float | np.ndarray:
     )
     with np.errstate(divide="ignore", invalid="ignore"):
         values_db = 20.0 * np.log10(response) - 20.0 * np.log10(reference_response)
+    values_db = np.maximum(values_db, DB_FLOOR)
     return float(values_db) if values_db.ndim == 0 else values_db
+
+
+def c_weighting_db(frequencies_hz: float | np.ndarray) -> float | np.ndarray:
+    """C ponderacion IEC 61672 en dB, normalizada a 0 dB en 1 kHz."""
+    frequencies = np.asarray(frequencies_hz, dtype=np.float64)
+    if not np.all(np.isfinite(frequencies)) or np.any(frequencies < 0.0):
+        raise ValueError("frequencies_hz debe ser finita y no negativa")
+
+    frequency_2 = np.square(frequencies)
+    reference_2 = 1_000.0**2
+
+    def response(frequency_squared: np.ndarray) -> np.ndarray:
+        return (
+            12_194.0**2 * frequency_squared
+            / ((frequency_squared + 20.6**2) * (frequency_squared + 12_194.0**2))
+        )
+
+    reference_response = response(np.asarray(reference_2))
+    values_db = 20.0 * np.log10(
+        np.maximum(response(frequency_2), np.finfo(np.float64).tiny)
+        / reference_response
+    )
+    values_db = np.maximum(values_db, DB_FLOOR)
+    return float(values_db) if values_db.ndim == 0 else values_db
+
+
+def equivalent_noise_bandwidth_hz(sample_rate_hz: float, fft_size: int) -> float:
+    """ENBW de ventana Hann periódica en Hz: fs * sum(w²) / sum(w)²."""
+    if not np.isfinite(sample_rate_hz) or sample_rate_hz <= 0.0:
+        raise ValueError("sample_rate_hz debe ser finita y positiva")
+    if not isinstance(fft_size, (int, np.integer)) or fft_size < 2:
+        raise ValueError("fft_size debe ser un entero de al menos 2")
+    window = np.hanning(fft_size + 1)[:-1]
+    coherent_gain = float(np.sum(window))
+    if coherent_gain <= 0.0:
+        raise ValueError("la ventana no tiene ganancia coherente positiva")
+    return float(sample_rate_hz * np.sum(window**2) / coherent_gain**2)
 
 
 def total_level_db(
     samples: np.ndarray,
     weighting: str = "Z",
-    sample_rate: float = 48_000.0,
+    sample_rate: float = DEFAULT_SAMPLE_RATE_HZ,
 ) -> float:
-    """Nivel RMS total en dBFS por Parseval, con ponderacion Z o A.
+    """Nivel RMS total en dBFS por Parseval, con ponderacion Z, A o C.
 
-    ``sample_rate`` solo interviene al calcular la ponderacion A; se usa 48 kHz
-    por defecto y la interfaz pasa siempre la frecuencia real del stream.
+    ``sample_rate`` solo interviene al calcular la ponderacion A/C; se usa
+    48 kHz por defecto y la interfaz pasa la frecuencia real del stream.
     """
-    if weighting not in ("Z", "A"):
-        raise ValueError("weighting debe ser 'Z' o 'A'")
+    if weighting not in ("Z", "A", "C"):
+        raise ValueError("weighting debe ser 'Z', 'A' o 'C'")
+    if not np.isfinite(sample_rate) or sample_rate <= 0.0:
+        raise ValueError("sample_rate debe ser finita y positiva")
 
-    samples = np.asarray(samples, dtype=np.float64).reshape(-1)
+    samples = np.asarray(samples, dtype=np.float64)
+    if samples.ndim != 1:
+        raise ValueError("samples debe ser un vector 1-D")
+    if not np.all(np.isfinite(samples)):
+        raise ValueError("samples debe contener solo valores finitos")
     if samples.size == 0:
         return DB_FLOOR
 
@@ -80,6 +133,10 @@ def total_level_db(
         frequencies = np.fft.rfftfreq(samples.size, d=1.0 / float(sample_rate))
         weighting_db = a_weighting_db(frequencies)
         power *= np.power(10.0, weighting_db / 10.0)
+    elif weighting == "C":
+        frequencies = np.fft.rfftfreq(samples.size, d=1.0 / float(sample_rate))
+        weighting_db = c_weighting_db(frequencies)
+        power *= np.power(10.0, weighting_db / 10.0)
 
     mean_square = float(np.sum(power * bin_weights) / samples.size**2)
     return _to_db(np.sqrt(mean_square), DB_FLOOR)
@@ -90,15 +147,28 @@ def spectrum_db(
     fft_size: int,
     db_floor: float = DB_FLOOR,
 ) -> np.ndarray:
-    """Magnitud RFFT con ventana Hann y suelo en dB para una visualizacion estable.
+    """Magnitud de pico dBFS en RFFT, corregida por ganancia coherente Hann.
+
+    0 dBFS corresponde a amplitud de pico 1.0; un seno de amplitud pico 1.0
+    tiene RMS de tiempo -3.0103 dBFS. El ENBW para ruido esta disponible en
+    :func:`equivalent_noise_bandwidth_hz`.
 
     ``rfft`` devuelve solo la mitad no negativa del espectro: cada bin interior
     representa un par de frecuencias conjugadas, por eso su magnitud se
     duplica. DC y Nyquist (si existe) son bins unicos y no se duplican.
     """
+    samples = np.asarray(samples, dtype=np.float64)
+    if samples.ndim != 1:
+        raise ValueError("samples debe ser un vector 1-D")
+    if not isinstance(fft_size, (int, np.integer)) or fft_size < 1:
+        raise ValueError("fft_size debe ser un entero positivo")
+    if not np.isfinite(db_floor):
+        raise ValueError("db_floor debe ser finito")
+    if not np.all(np.isfinite(samples)):
+        raise ValueError("samples debe contener solo valores finitos")
     if samples.size == 0:
         return np.full(fft_size // 2 + 1, db_floor, dtype=np.float64)
-    window = np.hanning(samples.size)
+    window = np.hanning(samples.size + 1)[:-1]
     coherent_gain = np.sum(window)
     magnitude = np.abs(np.fft.rfft(samples * window, n=fft_size))
     magnitude /= max(coherent_gain, np.finfo(np.float64).eps)
@@ -113,6 +183,13 @@ def level_db(
     db_floor: float = DB_FLOOR,
 ) -> tuple[float, float]:
     """Devuelve ``(rms_db, peak_db)`` de un bloque de audio."""
+    samples = np.asarray(samples, dtype=np.float64)
+    if samples.ndim != 1:
+        raise ValueError("samples debe ser un vector 1-D")
+    if not np.isfinite(db_floor):
+        raise ValueError("db_floor debe ser finito")
+    if not np.all(np.isfinite(samples)):
+        raise ValueError("samples debe contener solo valores finitos")
     if samples.size == 0:
         return db_floor, db_floor
     peak = float(np.max(np.abs(samples)))
@@ -121,13 +198,15 @@ def level_db(
 
 
 def _to_db(value: float, db_floor: float) -> float:
-    return max(20.0 * np.log10(max(value, 1e-12)), db_floor)
+    linear_floor = 10.0 ** (db_floor / 20.0)
+    return max(20.0 * np.log10(max(value, linear_floor)), db_floor)
 
 
 def gain_db(transfer: np.ndarray, db_floor: float = DB_FLOOR) -> np.ndarray:
     """Magnitud de una respuesta compleja expresada en dB."""
     magnitude = np.abs(np.asarray(transfer))
-    return np.maximum(20.0 * np.log10(np.maximum(magnitude, 1e-12)), db_floor)
+    linear_floor = 10.0 ** (db_floor / 20.0)
+    return np.maximum(20.0 * np.log10(np.maximum(magnitude, linear_floor)), db_floor)
 
 
 def third_octave_bands(
@@ -164,7 +243,8 @@ def third_octave_bands(
             continue
         power = float(np.mean(np.power(10.0, levels[mask] / 10.0)))
         kept_centers.append(float(center))
-        kept_levels.append(max(10.0 * np.log10(max(power, 1e-12)), db_floor))
+        power_floor = 10.0 ** (db_floor / 10.0)
+        kept_levels.append(max(10.0 * np.log10(max(power, power_floor)), db_floor))
     return (
         np.asarray(kept_centers, dtype=np.float64),
         np.asarray(kept_levels, dtype=np.float64),

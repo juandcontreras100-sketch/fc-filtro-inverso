@@ -22,15 +22,22 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from src.ui.spl_persistence import input_device_name, load_spl_calibration
+from src.config import (
+    DEFAULT_FFT_SIZE_SAMPLES,
+    DEFAULT_SAMPLE_RATE_HZ,
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Ecualizador FFT full-duplex con espectros en vivo"
     )
-    parser.add_argument("--sample-rate", type=float, default=48_000.0)
+    parser.add_argument("--sample-rate", type=float, default=DEFAULT_SAMPLE_RATE_HZ)
     parser.add_argument(
-        "--fft-size", type=int, default=2_048, help="par; el salto es fft-size/2"
+        "--fft-size",
+        type=int,
+        default=DEFAULT_FFT_SIZE_SAMPLES,
+        help="par; el salto es fft-size/2",
     )
     parser.add_argument(
         "--channels", type=int, default=1, help="canales del dispositivo full-duplex"

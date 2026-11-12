@@ -1,21 +1,24 @@
 """Genera una medición sintética para probar la carga de calibración."""
 
 import argparse
+import json
 import sys
+from pathlib import Path
 
 import numpy as np
 
+from src.config import DEFAULT_FFT_SIZE_SAMPLES, DEFAULT_SAMPLE_RATE_HZ
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Genera una medición demo para el filtro inverso")
-    parser.add_argument("--fft-size", type=int, default=2_048)
-    parser.add_argument("--sample-rate", type=float, default=48_000.0)
+    parser.add_argument("--fft-size", type=int, default=DEFAULT_FFT_SIZE_SAMPLES)
+    parser.add_argument("--sample-rate", type=float, default=DEFAULT_SAMPLE_RATE_HZ)
     return parser.parse_args()
 
 
 def generate_measurement(
-    fft_size: int = 2_048,
-    sample_rate: float = 48_000.0,
+    fft_size: int = DEFAULT_FFT_SIZE_SAMPLES,
+    sample_rate: float = DEFAULT_SAMPLE_RATE_HZ,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Devuelve H(f) y gamma² con las muescas demo configuradas."""
     if not isinstance(fft_size, (int, np.integer)) or fft_size < 4 or fft_size % 2:
@@ -52,10 +55,26 @@ def main() -> int:
         print(f"Configuración no válida: {error}", file=sys.stderr)
         return 2
 
-    np.save("medicion_H.npy", h_response)
-    np.save("medicion_gamma2.npy", coherence)
+    h_path = Path("medicion_sintetica_H.npy")
+    coherence_path = Path("medicion_sintetica_gamma2.npy")
+    np.save(h_path, h_response)
+    np.save(coherence_path, coherence)
+    h_path.with_suffix(".json").write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "sample_rate_hz": args.sample_rate,
+                "fft_size_samples": args.fft_size,
+                "frequency_range_hz": [20.0, min(20_000.0, args.sample_rate / 2.0)],
+                "synthetic": True,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     print(
-        f"medicion_H.npy: {h_response.size} bins a {args.sample_rate:g} Hz, "
+        f"{h_path}: {h_response.size} bins a {args.sample_rate:g} Hz, "
         "muescas de -18 dB en 1 kHz y -9 dB en 4 kHz"
     )
     return 0

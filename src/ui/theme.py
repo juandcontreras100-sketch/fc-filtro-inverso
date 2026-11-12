@@ -94,8 +94,8 @@ def stylesheet() -> str:
         background-color: {PANEL};
         border: 1px solid {PANEL_EDGE};
         border-radius: 6px;
-        margin-top: 8px;
-        padding: 8px 6px 6px 6px;
+        margin-top: 16px;
+        padding: 14px 6px 6px 6px;
         font-weight: 600;
     }}
     QGroupBox::title {{

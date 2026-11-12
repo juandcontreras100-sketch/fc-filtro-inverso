@@ -110,6 +110,20 @@ class InverseFilterTests(unittest.TestCase):
         self.assertEqual(rendered.shape, audio.shape)
         self.assertTrue(np.allclose(rendered, audio, atol=1e-12))
 
+    def test_overlap_add_has_exactly_one_hop_of_algorithmic_latency(self):
+        fft_size = 64
+        equalizer = OverlapAddFFTEqualizer(np.ones(fft_size // 2 + 1), fft_size)
+        first = np.zeros(equalizer.hop_size)
+        first[0] = 1.0
+        second = np.zeros(equalizer.hop_size)
+
+        initial_output = equalizer.process_block(first)
+        delayed_output = equalizer.process_block(second)
+
+        self.assertEqual(initial_output.size, 0)
+        self.assertEqual(int(np.argmax(np.concatenate((np.zeros(equalizer.hop_size), delayed_output)))), equalizer.hop_size)
+        self.assertAlmostEqual(float(np.max(delayed_output)), 1.0, places=12)
+
     def test_overlap_add_rejects_wrong_block_size_and_spectrum_shape(self):
         with self.assertRaisesRegex(ValueError, "bins"):
             OverlapAddFFTEqualizer(np.ones(4), fft_size=16)

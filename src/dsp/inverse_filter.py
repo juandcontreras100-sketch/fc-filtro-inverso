@@ -7,9 +7,9 @@ fuera de ese intervalo se recortan para no volver agresivo al inversor.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
 import numpy as np
+
+from src.config import MIN_COHERENCE_SQUARED
 
 
 def _as_finite_1d(name: str, values: np.ndarray, *, complex_ok: bool) -> np.ndarray:
@@ -100,6 +100,7 @@ def estimate_h_inverse(
     *,
     peak_percentile: float = 100.0,
     reference_mask: np.ndarray | None = None,
+    coherence_threshold: float = MIN_COHERENCE_SQUARED,
 ) -> np.ndarray:
     """Estima un inverso Wiener/Tikhonov con límite estricto de ganancia.
 
@@ -111,9 +112,19 @@ def estimate_h_inverse(
     """
     h = _as_finite_1d("h_freq", h_freq, complex_ok=True)
     max_gain_db = _validate_non_negative_scalar("max_gain_db", max_gain_db)
+    coherence_threshold = float(coherence_threshold)
+    if (
+        not np.isfinite(coherence_threshold)
+        or not 0.0 <= coherence_threshold <= 1.0
+    ):
+        raise ValueError("coherence_threshold debe estar entre 0 y 1")
+    gamma_squared = _as_finite_1d("coherence", coherence, complex_ok=False)
+    if gamma_squared.shape != h.shape:
+        raise ValueError("h_freq y coherence deben tener la misma longitud")
+    valid_coherence = np.clip(gamma_squared, 0.0, 1.0) >= coherence_threshold
     eps = epsilon_profile(
         h,
-        coherence,
+        gamma_squared,
         epsilon_base,
         peak_percentile=peak_percentile,
         reference_mask=reference_mask,
@@ -125,78 +136,83 @@ def estimate_h_inverse(
     max_allowed = 10.0 ** (max_gain_db / 20.0)
     magnitude = np.abs(h_inverse)
     gain_scale = np.minimum(1.0, max_allowed / np.maximum(magnitude, 1e-300))
-    return h_inverse * gain_scale
+    h_inverse *= gain_scale
+    # Unity means "do not correct": muting a low-coherence band would be a
+    # larger and equally unsupported change than retaining the original path.
+    h_inverse[~valid_coherence] = 1.0
+    return h_inverse
 
 
-def _sqrt_hann(fft_size: int) -> np.ndarray:
-    """Ventana sqrt-Hann periódica, COLA para salto N/2."""
-    return np.sqrt(np.hanning(fft_size + 1)[:-1])
-
-
-@dataclass
 class OverlapAddFFTEqualizer:
-    """Ecualizador WOLA para bloques de audio de tamaño fijo.
+    """Ecualizador WOLA causal para bloques de audio de tamaño fijo.
 
-    El objeto recibe exactamente ``hop_size`` muestras por llamada a
-    :meth:`process_block`. Usa ventanas sqrt-Hann de análisis y síntesis,
-    suma las regiones solapadas y las normaliza por la suma de ventanas. La
-    primera salida contiene solo el preroll y se descarta internamente; el
-    retardo algorítmico es un salto. :meth:`flush` entrega la cola restante.
+    Cada llamada recibe ``hop_size`` muestras. Una ventana Hann periódica
+    cumple COLA al 50 % de solapamiento (la suma de las ventanas desplazadas
+    es uno); cada trama se convoluciona linealmente con los ``fft_size``
+    coeficientes causales de la inversa y sus colas se suman. El relleno FFT
+    evita el aliasado circular que aparece al filtrar tramas sin extensión.
 
-    ``h_inverse`` debe contener ``fft_size // 2 + 1`` bins, es decir, el
-    formato de :func:`numpy.fft.rfft` para una señal real.
+    El primer bloque de salida es el preroll de una trama y se descarta; la
+    latencia algorítmica es exactamente un hop. ``h_inverse`` usa el formato
+    RFFT de ``fft_size // 2 + 1`` bins.
     """
 
-    h_inverse: np.ndarray
-    fft_size: int
-    hop_size: int | None = None
-    _window: np.ndarray = field(init=False, repr=False)
-    _input_ring: np.ndarray = field(init=False, repr=False)
-    _frame: np.ndarray = field(init=False, repr=False)
-    _ring_write: int = field(init=False, default=0, repr=False)
-    _ola: np.ndarray = field(init=False, repr=False)
-    _normalizer: np.ndarray = field(init=False, repr=False)
-    _discard_preroll: bool = field(init=False, default=True, repr=False)
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.fft_size, (int, np.integer)) or self.fft_size < 4:
+    def __init__(
+        self,
+        h_inverse: np.ndarray,
+        fft_size: int,
+        hop_size: int | None = None,
+    ) -> None:
+        if not isinstance(fft_size, (int, np.integer)) or fft_size < 4:
             raise ValueError("fft_size debe ser un entero de al menos 4")
-        if self.fft_size % 2:
+        if fft_size % 2:
             raise ValueError("fft_size debe ser par para usar la ventana COLA N/2")
 
-        self.hop_size = self.fft_size // 2 if self.hop_size is None else self.hop_size
+        self.fft_size = int(fft_size)
+        self.hop_size = self.fft_size // 2 if hop_size is None else hop_size
         if self.hop_size != self.fft_size // 2:
             raise ValueError("hop_size debe ser fft_size // 2 para esta ventana COLA")
 
-        self.h_inverse = _as_finite_1d("h_inverse", self.h_inverse, complex_ok=True)
-        expected_bins = self.fft_size // 2 + 1
-        if self.h_inverse.size != expected_bins:
-            raise ValueError(f"h_inverse debe tener {expected_bins} bins para fft_size={self.fft_size}")
+        self._h_inverse = np.empty(0, dtype=np.complex128)
+        self._filter_spectrum = np.empty(0, dtype=np.complex128)
+        self.h_inverse = h_inverse
 
-        self._window = _sqrt_hann(self.fft_size)
+        self._window = np.hanning(self.fft_size + 1)[:-1]
         self._input_ring = np.zeros(self.fft_size, dtype=np.float64)
         self._frame = np.zeros(self.fft_size, dtype=np.float64)
-        self._ola = np.zeros(self.fft_size, dtype=np.float64)
-        self._normalizer = np.zeros(self.fft_size, dtype=np.float64)
+        self._ola = np.zeros(2 * self.fft_size, dtype=np.float64)
+        self._ring_write = 0
+        self._discard_preroll = True
+
+    @property
+    def h_inverse(self) -> np.ndarray:
+        return self._h_inverse
+
+    @h_inverse.setter
+    def h_inverse(self, values: np.ndarray) -> None:
+        inverse = _as_finite_1d("h_inverse", values, complex_ok=True)
+        expected_bins = self.fft_size // 2 + 1
+        if inverse.size != expected_bins:
+            raise ValueError(
+                f"h_inverse debe tener {expected_bins} bins para fft_size={self.fft_size}"
+            )
+        impulse = np.fft.irfft(inverse, n=self.fft_size)
+        self._h_inverse = inverse
+        self._filter_spectrum = np.fft.rfft(impulse, n=2 * self.fft_size)
 
     def _process_frame(self, frame: np.ndarray) -> np.ndarray:
-        spectrum = np.fft.rfft(frame * self._window)
-        filtered = np.fft.irfft(spectrum * self.h_inverse, n=self.fft_size)
-        weighted = filtered * self._window
-        window_power = self._window ** 2
-        self._ola += weighted
-        self._normalizer += window_power
-
-        output = np.divide(
-            self._ola[: self.hop_size],
-            self._normalizer[: self.hop_size],
-            out=np.zeros(self.hop_size, dtype=np.float64),
-            where=self._normalizer[: self.hop_size] > np.finfo(np.float64).eps,
+        spectrum = np.fft.rfft(
+            frame * self._window,
+            n=2 * self.fft_size,
         )
+        filtered = np.fft.irfft(
+            spectrum * self._filter_spectrum,
+            n=2 * self.fft_size,
+        )
+        self._ola[:-1] += filtered[:-1]
+        output = self._ola[: self.hop_size].copy()
         self._ola[:-self.hop_size] = self._ola[self.hop_size :]
         self._ola[-self.hop_size :] = 0.0
-        self._normalizer[:-self.hop_size] = self._normalizer[self.hop_size :]
-        self._normalizer[-self.hop_size :] = 0.0
         return output
 
     def process_block(self, block: np.ndarray) -> np.ndarray:
@@ -234,5 +250,4 @@ class OverlapAddFFTEqualizer:
         self._frame.fill(0.0)
         self._ring_write = 0
         self._ola.fill(0.0)
-        self._normalizer.fill(0.0)
         self._discard_preroll = True
