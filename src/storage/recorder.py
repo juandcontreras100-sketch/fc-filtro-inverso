@@ -4,7 +4,7 @@ La grabadora se usa **desde el hilo de la GUI**: recibe los espectros y los
 niveles ya calculados y los escribe en disco. Nunca se llama desde el callback
 de audio, que debe seguir siendo hard-real-time.
 
-Cada sesion vive en ``sesiones/AAAA-MM-DD_HHMMSS/`` y contiene:
+Cada sesion vive en ``sesiones/<usuario>/AAAA-MM-DD_HHMMSS/`` y contiene:
 
 - ``metadata.json``: formato y estado del motor al iniciar la grabacion.
 - ``niveles.csv``: una fila por frame de la GUI.
@@ -18,9 +18,11 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 import numpy as np
+
+from src.storage.profiles import UserProfile
 
 # Encabezado exacto del registro de niveles.
 CSV_HEADER = (
@@ -70,9 +72,16 @@ class SessionRecorder:
         root_dir: str | Path = "sesiones",
         *,
         clock: Callable[[], float] = time.monotonic,
+        user: UserProfile | None = None,
+        devices: Mapping[str, str | None] | None = None,
     ) -> None:
         self.engine = engine
-        self.root_dir = Path(root_dir)
+        self.user = user
+        self.devices = dict(devices or {})
+        # Cada usuario tiene su propia carpeta, ya saneada por UserProfile.
+        self.root_dir = (
+            Path(root_dir) / user.folder_name if user is not None else Path(root_dir)
+        )
         self._clock = clock
 
         self._directory: Path | None = None
@@ -223,6 +232,15 @@ class SessionRecorder:
                 None if calibration is None else Path(calibration).name
             ),
             "mode": "bypass" if bool(self.engine.bypass) else "ecualizado",
+            "usuario": (
+                None
+                if self.user is None
+                else {
+                    "nombre": self.user.name,
+                    "documento": self.user.document,
+                }
+            ),
+            "dispositivos": dict(self.devices),
         }
 
     def _new_directory(self) -> Path:

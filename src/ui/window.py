@@ -839,7 +839,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if recording:
             if self._recorder is not None:
                 return
-            recorder = SessionRecorder(self.engine)
+            recorder = SessionRecorder(
+                self.engine,
+                user=self.user,
+                devices=self.devices,
+            )
             try:
                 directory = recorder.start()
             except Exception as error:  # noqa: BLE001 - el panel no debe romperse
@@ -864,11 +868,17 @@ class MainWindow(QtWidgets.QMainWindow):
         if directory is not None:
             self._set_status(f"Sesión guardada en {directory}")
 
+    def _default_export_path(self) -> Path:
+        """Captura por defecto en la carpeta del usuario, si inicio sesion."""
+        if self.user is None:
+            return Path("captura.png")
+        return Path("sesiones") / self.user.folder_name / "captura.png"
+
     def _on_export_requested(self) -> None:
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
             "Exportar captura",
-            "captura.png",
+            str(self._default_export_path()),
             "Imagen PNG (*.png)",
         )
         if not path:
@@ -885,6 +895,7 @@ class MainWindow(QtWidgets.QMainWindow):
         png_path = Path(path)
         if png_path.suffix.lower() != ".png":
             png_path = png_path.with_suffix(".png")
+        png_path.parent.mkdir(parents=True, exist_ok=True)
         csv_path = png_path.with_suffix(".csv")
         ImageExporter(self.graphics.scene()).export(str(png_path))
         self._write_current_csv(csv_path)

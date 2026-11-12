@@ -4,6 +4,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +15,7 @@ import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
 
 from src.audio.engine import AudioEngine, SpectrumFrame
+from src.storage.profiles import UserProfile
 from src.storage.recorder import SessionRecorder
 from src.ui import theme
 from src.ui import window as window_module
@@ -551,7 +553,9 @@ class MainWindowSessionTests(unittest.TestCase):
         return mock.patch.object(
             window_module,
             "SessionRecorder",
-            side_effect=lambda engine: SessionRecorder(engine, root_dir=self.root),
+            side_effect=lambda engine, **kwargs: SessionRecorder(
+                engine, root_dir=self.root, **kwargs
+            ),
         )
 
     def test_recording_toggle_creates_and_closes_a_session(self):
@@ -597,6 +601,40 @@ class MainWindowSessionTests(unittest.TestCase):
 
         with np.load(directory / "espectros.npz") as data:
             self.assertEqual(data["input_db"].shape, (1, self.engine.bin_count))
+
+    def test_the_recording_gets_the_logged_in_user_and_devices(self):
+        profile = UserProfile("Juan Perez", "1234567")
+        devices = {"entrada": "Microfono", "salida": "Altavoz"}
+        window = MainWindow(self.engine, user=profile, devices=devices)
+        self.addCleanup(window.close)
+
+        with self._patch_recorder():
+            window._on_record_toggled(True)
+            directory = window._recorder.directory
+            window._on_record_toggled(False)
+
+        self.assertEqual(directory.parent.name, "juan_perez_1234567")
+        metadata = json.loads(
+            (directory / "metadata.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(metadata["usuario"]["nombre"], "Juan Perez")
+        self.assertEqual(metadata["dispositivos"], devices)
+
+    def test_the_export_dialog_defaults_to_the_user_folder(self):
+        profile = UserProfile("Juan Perez", "1234567")
+        window = MainWindow(self.engine, user=profile)
+        self.addCleanup(window.close)
+
+        with mock.patch.object(
+            window_module.QtWidgets.QFileDialog,
+            "getSaveFileName",
+            return_value=(str(self.root / "captura.png"), ""),
+        ) as dialog:
+            window._on_export_requested()
+
+        default = Path(dialog.call_args.args[2])
+        self.assertEqual(default, Path("sesiones") / "juan_perez_1234567" / "captura.png")
+        self.assertTrue((self.root / "captura.png").exists())
 
     def test_export_capture_writes_a_png_and_the_current_csv(self):
         self.window.show()

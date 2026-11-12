@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from src.audio.engine import AudioEngine
+from src.storage.profiles import UserProfile
 from src.storage.recorder import SessionRecorder
 
 CSV_HEADER = [
@@ -223,6 +224,57 @@ class SessionRecorderTests(unittest.TestCase):
         recorder.start()
         with self.assertRaises(RuntimeError):
             recorder.start()
+
+    def test_a_logged_in_session_lives_in_the_user_folder(self):
+        profile = UserProfile("Juan Perez", "1234567")
+        recorder = SessionRecorder(
+            self.engine,
+            root_dir=self.root,
+            clock=self._clock,
+            user=profile,
+        )
+        self.addCleanup(recorder.stop)
+
+        directory = recorder.start()
+
+        self.assertEqual(directory.parent, self.root / "juan_perez_1234567")
+        self.assertEqual(directory.parent.parent, self.root)
+        self.assertRegex(directory.name, r"^\d{4}-\d{2}-\d{2}_\d{6}$")
+
+    def test_metadata_includes_the_user_and_devices(self):
+        profile = UserProfile("Juan Perez", "1234567")
+        devices = {"entrada": "Microfono USB", "salida": "Altavoz USB"}
+        recorder = SessionRecorder(
+            self.engine,
+            root_dir=self.root,
+            clock=self._clock,
+            user=profile,
+            devices=devices,
+        )
+        self.addCleanup(recorder.stop)
+
+        directory = recorder.start()
+        metadata = json.loads(
+            (directory / "metadata.json").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(
+            metadata["usuario"],
+            {"nombre": "Juan Perez", "documento": "1234567"},
+        )
+        self.assertEqual(metadata["dispositivos"], devices)
+
+    def test_without_a_user_the_session_stays_in_the_root(self):
+        recorder = self._make_recorder()
+
+        directory = recorder.start()
+        metadata = json.loads(
+            (directory / "metadata.json").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(directory.parent, self.root)
+        self.assertIsNone(metadata["usuario"])
+        self.assertEqual(metadata["dispositivos"], {})
 
 
 if __name__ == "__main__":
