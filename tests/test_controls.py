@@ -83,6 +83,20 @@ class ControlPanelTests(unittest.TestCase):
         expected_rate = self.panel.rate_combo.currentData()
         self.assertEqual(received[-1], (expected_rate, 4096))
 
+    def test_the_spectrum_combo_starts_on_linea_and_emits_on_change(self):
+        self.assertEqual(self.panel.spectrum_combo.currentData(), "linea")
+
+        received: list[str] = []
+        self.panel.spectrumStyleChanged.connect(received.append)
+
+        self.panel.spectrum_combo.setCurrentIndex(1)
+        self.assertEqual(received, ["barras"])
+
+        # set_* programmatico no emite la senal.
+        self.panel.set_spectrum_style("linea")
+        self.assertEqual(self.panel.spectrum_combo.currentData(), "linea")
+        self.assertEqual(received, ["barras"])
+
     def test_the_panel_drives_the_engine(self):
         engine = AudioEngine(sample_rate=48_000.0, fft_size=512)
         engine.h_response = np.ones(engine.bin_count, dtype=np.complex128)
@@ -225,6 +239,81 @@ class MainWindowLogPlotsTests(unittest.TestCase):
             np.testing.assert_allclose(values, 0.0, atol=1e-9)
 
 
+class MainWindowSpectrumStyleTests(unittest.TestCase):
+    """Alternancia entre la vista de linea y la de barras de 1/3 de octava."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = pg.mkQApp("test-vista-espectro")
+
+    def setUp(self):
+        self.engine = AudioEngine(sample_rate=48_000.0, fft_size=512)
+        self.window = MainWindow(self.engine)
+
+    def tearDown(self):
+        self.window.close()
+
+    def _feed_frame(self):
+        hop_size = self.engine.hop_size
+        frame = SpectrumFrame(
+            input_samples=np.full(hop_size, 0.1),
+            output_samples=np.full(hop_size, 0.05),
+            would_clip=False,
+            input_window=np.full(self.engine.fft_size, 0.1),
+            output_window=np.full(self.engine.fft_size, 0.05),
+        )
+        self.engine.display_queue.put(frame)
+        self.window._refresh()
+
+    def test_bars_mode_hides_the_curves_and_draws_bands(self):
+        self._feed_frame()
+
+        self.window.controls.spectrum_combo.setCurrentIndex(1)
+
+        self.assertEqual(self.window._spectrum_style, "barras")
+        self.assertTrue(self.window.input_curve.isHidden())
+        self.assertTrue(self.window.output_curve.isHidden())
+        self.assertTrue(self.window.filter_curve.isHidden())
+        self.assertFalse(self.window.input_bars.isHidden())
+        self.assertFalse(self.window.output_bars.isHidden())
+        self.assertFalse(self.window.filter_band_curve.isHidden())
+
+        band_count = self.window.input_bars.opts["x"].size
+        self.assertGreater(band_count, 0)
+        self.assertEqual(
+            self.window.output_bars.opts["x"].size, band_count
+        )
+        self.assertEqual(self.window.filter_band_curve.getData()[0].size, band_count)
+
+        # El eje pasa a indices de banda con ticks de frecuencia central.
+        self.assertFalse(self.window.input_plot.ctrl.logXCheck.isChecked())
+        ticks = self.window.input_plot.getAxis("bottom")._tickLevels
+        self.assertIsNotNone(ticks)
+        self.assertEqual(len(ticks[0]), band_count)
+        self.assertEqual(ticks[0][0], (0.0, "100"))
+
+        # El cursor lee la frecuencia central de la banda.
+        self.assertIsNotNone(self.window.readout._labels)
+        self.assertEqual(self.window.readout._labels.size, band_count)
+
+    def test_line_mode_restores_the_log_axis(self):
+        self.window.controls.spectrum_combo.setCurrentIndex(1)
+        self.window.controls.spectrum_combo.setCurrentIndex(0)
+
+        self.assertFalse(self.window.input_curve.isHidden())
+        self.assertFalse(self.window.output_curve.isHidden())
+        self.assertFalse(self.window.filter_curve.isHidden())
+        self.assertTrue(self.window.input_bars.isHidden())
+        self.assertTrue(self.window.output_bars.isHidden())
+        self.assertTrue(self.window.filter_band_curve.isHidden())
+
+        self.assertTrue(self.window.input_plot.ctrl.logXCheck.isChecked())
+        self.assertIsNone(self.window.input_plot.getAxis("bottom")._tickLevels)
+        x_min, x_max = self.window.input_plot.viewRange()[0]
+        self.assertAlmostEqual(x_min, np.log10(20.0), places=5)
+        self.assertAlmostEqual(x_max, np.log10(20_000.0), places=5)
+
+
 class _FakeViewBox:
     def sceneBoundingRect(self):
         return QtCore.QRectF(0.0, 0.0, 100.0, 100.0)
@@ -241,6 +330,16 @@ class _FakePlot:
         return _FakeViewBox()
 
 
+class _BandFakeViewBox(_FakeViewBox):
+    def mapSceneToView(self, _position):
+        return QtCore.QPointF(1.0, 0.0)
+
+
+class _BandFakePlot(_FakePlot):
+    def getViewBox(self):
+        return _BandFakeViewBox()
+
+
 class CursorReadoutLogTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -251,6 +350,20 @@ class CursorReadoutLogTests(unittest.TestCase):
         readout.set_spectra(
             np.array([100.0, 1_000.0, 10_000.0]),
             {"entrada": np.array([-10.0, -20.0, -30.0])},
+        )
+
+        text = readout.handle_mouse(QtCore.QPointF(50.0, 50.0))
+
+        self.assertIsNotNone(text)
+        self.assertIn("1.000 Hz", text)
+        self.assertIn("entrada -20.0 dB", text)
+
+    def test_band_cursor_reports_the_center_frequency(self):
+        readout = CursorReadout([_BandFakePlot()])
+        readout.set_spectra(
+            np.array([0.0, 1.0, 2.0]),
+            {"entrada": np.array([-10.0, -20.0, -30.0])},
+            labels=np.array([800.0, 1_000.0, 1_250.0]),
         )
 
         text = readout.handle_mouse(QtCore.QPointF(50.0, 50.0))

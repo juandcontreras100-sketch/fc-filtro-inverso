@@ -3,7 +3,13 @@ import unittest
 import numpy as np
 
 from src.audio.engine import AudioEngine
-from src.dsp.spectrum import DB_FLOOR, gain_db, level_db, spectrum_db
+from src.dsp.spectrum import (
+    DB_FLOOR,
+    gain_db,
+    level_db,
+    spectrum_db,
+    third_octave_bands,
+)
 
 
 class SpectrumTests(unittest.TestCase):
@@ -77,6 +83,58 @@ class SpectrumTests(unittest.TestCase):
         values = gain_db(np.array([1.0, 2.0]))
         self.assertAlmostEqual(float(values[0]), 0.0, places=6)
         self.assertAlmostEqual(float(values[1]), 20.0 * np.log10(2.0), places=6)
+
+
+class ThirdOctaveBandTests(unittest.TestCase):
+    """Agrupado por bandas de 1/3 de octava para la vista de barras."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fft_size = 4096
+        cls.sample_rate = 48_000.0
+        cls.frequencies = np.fft.rfftfreq(
+            cls.fft_size, d=1.0 / cls.sample_rate
+        )
+
+    def test_a_pure_tone_lands_in_its_band(self):
+        tone_hz = 1_000.0
+        t = np.arange(self.fft_size) / self.sample_rate
+        samples = 0.5 * np.sin(2.0 * np.pi * tone_hz * t)
+        levels = spectrum_db(samples, self.fft_size)
+
+        centers, band_levels = third_octave_bands(levels, self.frequencies)
+
+        self.assertEqual(centers.size, band_levels.size)
+        peak = int(np.argmax(band_levels))
+        self.assertEqual(centers[peak], tone_hz)
+        # Las bandas vecinas quedan muy por debajo del tono.
+        for offset in (-1, 1):
+            self.assertLess(
+                band_levels[peak + offset], band_levels[peak] - 20.0
+            )
+
+    def test_band_levels_never_go_below_the_floor(self):
+        values = spectrum_db(np.zeros(self.fft_size), self.fft_size)
+
+        centers, band_levels = third_octave_bands(values, self.frequencies)
+
+        self.assertGreater(centers.size, 0)
+        np.testing.assert_allclose(band_levels, DB_FLOOR)
+        self.assertTrue(np.all(band_levels >= DB_FLOOR))
+
+    def test_bands_without_bins_are_omitted(self):
+        # Resolucion de 93.75 Hz: las bandas de graves quedan sin bins.
+        fft_size = 512
+        frequencies = np.fft.rfftfreq(fft_size, d=1.0 / self.sample_rate)
+        values = spectrum_db(np.zeros(fft_size), fft_size)
+
+        centers, band_levels = third_octave_bands(values, frequencies)
+
+        self.assertEqual(centers.size, band_levels.size)
+        self.assertGreater(centers.size, 0)
+        self.assertEqual(centers[0], 100.0)
+        self.assertTrue(np.all(centers >= 100.0))
+        self.assertTrue(np.all(centers < self.sample_rate / 2.0))
 
 
 class SpectrumWindowTests(unittest.TestCase):

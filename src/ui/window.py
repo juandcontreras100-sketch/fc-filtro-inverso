@@ -29,10 +29,13 @@ from src.dsp.spectrum import (
 )
 from src.storage.recorder import SessionRecorder
 from src.ui import theme
+from src.ui.calibration import CalibrationDialog
 from src.ui.controls import ControlPanel
 from src.ui.meters import MeterPanel
 from src.ui.readout import CursorReadout
 from src.ui.spectrogram import SpectrogramWidget
+from src.ui.spl_context import spl_context_text, spl_zone_color
+from src.ui.spl_persistence import input_device_name, save_spl_calibration
 
 REFRESH_MS = 33  # ~30 FPS
 
@@ -54,13 +57,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._input_total_db = DB_FLOOR
         self._has_input_total = False
         self._recorder: SessionRecorder | None = None
+        self._calibration_dialog: CalibrationDialog | None = None
         self._input_history = np.zeros(engine.fft_size)
         self._output_history = np.zeros(engine.fft_size)
         # Peso del espectro anterior en el promedio exponencial de la GUI.
         self.spectrum_averaging = 0.8
 
         self.setWindowTitle("Ecualizador FFT en tiempo real")
-        self.resize(1_320, 880)
+        self.resize(1_360, 960)
         theme.apply_theme(self)
 
         self._build_ui()
@@ -84,7 +88,7 @@ class MainWindow(QtWidgets.QMainWindow):
         vertical.addWidget(self._build_spectrogram())
         vertical.setStretchFactor(0, 3)
         vertical.setStretchFactor(1, 1)
-        vertical.setSizes([640, 220])
+        vertical.setSizes([700, 220])
         outer.addWidget(vertical)
 
         self.statusBar().showMessage("Listo")
@@ -110,6 +114,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         side_layout.addWidget(self.meters)
         side_layout.addWidget(controls_scroll, 1)
+        side_layout.addWidget(self.controls.session_box)
         row.addWidget(side)
 
         graphs = QtWidgets.QWidget()
@@ -241,6 +246,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.controls.exportRequested.connect(self._on_export_requested)
         self.controls.splDisplayToggled.connect(self._on_spl_display_toggled)
         self.controls.splOffsetChanged.connect(self._on_spl_offset_changed)
+        self.controls.splCalibrationRequested.connect(
+            self._on_spl_calibration_requested
+        )
         self.controls.weightingChanged.connect(self._on_weighting_changed)
         self.graphics.scene().sigMouseMoved.connect(self._on_mouse_moved)
 
@@ -252,6 +260,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.controls.set_epsilon(self.engine.epsilon_base)
         if self.engine.spl_offset_db is not None:
             self.controls.set_spl_offset(self.engine.spl_offset_db)
+        self.controls.set_spl_calibration(self.engine.spl_offset_db)
         self.controls.set_weighting(self.engine.weighting)
         self.controls.set_calibration(
             str(self.engine.calibration_path.name) if self.engine.calibration_path else None
@@ -336,16 +345,25 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_total_level_label(self) -> None:
         if not self._has_input_total:
             self.controls.total_level_label.setText("—")
+            self.controls.spl_context_label.setText("")
+            self.controls.set_total_level_color()
             return
         value = self._input_total_db
         unit = "dBFS"
+        context = ""
+        color: str | None = None
         offset = self._active_spl_offset()
         if offset is not None:
             value = dbfs_to_spl(value, offset)
             unit = "dB SPL"
+            context = spl_context_text(value)
+            if self.engine.weighting == "A":
+                color = spl_zone_color(value)
         self.controls.total_level_label.setText(
             f"{value:.1f} {unit} ({self.engine.weighting})"
         )
+        self.controls.spl_context_label.setText(context)
+        self.controls.set_total_level_color(color)
 
     # ------------------------------------------------------------- acciones
     def _on_mode_changed(self, bypass: bool) -> None:
@@ -370,17 +388,50 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_mode_status()
 
     def _on_spl_display_toggled(self, active: bool) -> None:
-        if active and self.engine.spl_offset_db is None:
-            self.engine.spl_offset_db = float(self.controls.spl_offset_spin.value())
+        self.controls.set_spl_calibration(self.engine.spl_offset_db)
         self._update_input_level_axis()
         self._update_input_display()
         self._update_total_level_label()
 
     def _on_spl_offset_changed(self, value: float) -> None:
         self.engine.spl_offset_db = float(value)
+        self.controls.set_spl_calibration(self.engine.spl_offset_db)
         self._update_input_level_axis()
         self._update_input_display()
         self._update_total_level_label()
+
+    def _on_spl_calibration_requested(self) -> None:
+        dialog = CalibrationDialog(self.engine.sample_rate, parent=self)
+        self._calibration_dialog = dialog
+        try:
+            result = dialog.exec()
+        finally:
+            self._calibration_dialog = None
+        if result != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+
+        offset_db = dialog.offset_db
+        if offset_db is None:
+            return
+        self.engine.spl_offset_db = float(offset_db)
+        self.controls.set_spl_offset(offset_db)
+        self.controls.set_spl_calibration(offset_db)
+        self.controls.set_spl_display(True)
+        self._update_input_level_axis()
+        self._update_input_display()
+        self._update_total_level_label()
+        try:
+            save_spl_calibration(
+                float(offset_db), input_device_name(self.engine.device)
+            )
+        except Exception as error:  # noqa: BLE001 - la calibracion ya esta aplicada
+            self._set_status(
+                f"Calibracion aplicada, pero no se pudo guardar: {error}"
+            )
+        else:
+            self._set_status(
+                f"Calibracion SPL guardada: offset {offset_db:.1f} dB"
+            )
 
     def _on_weighting_changed(self, weighting: str) -> None:
         self.engine.weighting = weighting
@@ -467,24 +518,31 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _update_mode_status(self) -> None:
         if self.engine.bypass:
-            text = "Modo bypass: filtro plano"
-            state = "bypass"
+            text, tip, state = "Bypass", "Filtro plano: la salida copia la entrada.", "bypass"
         elif self.engine.is_calibrated:
-            text = f"Modo ecualizado (ganancia max {self.engine.max_gain_db:+.0f} dB)"
+            text = f"Ecualizado {self.engine.max_gain_db:+.0f} dB"
+            tip = "Filtro inverso activo. Vigile el nivel y la realimentacion."
             state = "active"
         else:
-            text = "Modo ecualizado sin calibracion: filtro plano"
-            state = "warning"
+            text, tip, state = (
+                "Sin calibracion",
+                "Ecualizado pedido, pero no hay H(f): el filtro queda plano.",
+                "warning",
+            )
         self.controls.set_status(text, state=state)
+        self.controls.status_label.setToolTip(tip)
 
     # -------------------------------------------------------------- refresco
     def _refresh(self) -> None:
         latest = None
         while True:
             try:
-                latest = self.engine.display_queue.get_nowait()
+                frame = self.engine.display_queue.get_nowait()
             except queue.Empty:
                 break
+            if self._calibration_dialog is not None:
+                self._calibration_dialog.add_block(frame.input_samples)
+            latest = frame
 
         while True:
             try:

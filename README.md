@@ -111,6 +111,71 @@ py generar_medicion_demo.py --fft-size 4096 --sample-rate 96000
 py main.py --fft-size 4096 --sample-rate 96000 --h-response medicion_H.npy --coherence medicion_gamma2.npy
 ```
 
+## Calibración dB SPL
+
+La escala de entrada se convierte mediante **dB SPL = dBFS + offset**. El offset
+depende de la cadena de captura; sin un offset válido, la interfaz indica
+`SIN CALIBRAR` y todos los valores de entrada permanecen en dBFS.
+
+### Asistente de calibración
+
+Con la entrada que desea calibrar seleccionada, abra el asistente desde el panel
+**Entrada SPL**. El diálogo (`QDialog`) toma las muestras de esa entrada y guía
+tres pasos:
+
+1. **Preparación:** use un calibrador de **94 dB SPL a 1 kHz** acoplado al
+   micrófono. Como alternativa, mida la misma señal con un sonómetro y use su
+   lectura como referencia SPL; el valor de referencia es ajustable.
+2. **Medición:** mantenga estable la referencia y capture **1 s** de entrada. La
+   medición solo es válida si cumple simultáneamente:
+   - RMS > -70 dBFS.
+   - Pico < -1 dBFS.
+   - Variación de RMS < 1 dB.
+3. **Resultado:** compruebe y aplique el offset calculado como
+   `offset_db = referencia SPL - RMS dBFS`.
+
+Al aplicar una medición válida se guarda `calibracion_spl.json` en la raíz del
+proyecto. Contiene `offset_db`, `date` (fecha ISO en UTC) y `device_name`, y está
+ignorado por git. La calibración se carga al iniciar el programa; si la entrada
+actual no coincide con `device_name`, la aplicación avisa que debe recalibrar.
+
+También puede indicar un offset conocido desde la línea de comandos:
+
+```powershell
+py main.py --spl-offset 120
+```
+
+`--spl-offset VALOR` tiene prioridad sobre el archivo. Si cambia de micrófono o
+interfaz de entrada, repita el asistente con esa entrada y una referencia válida,
+o proporcione su offset con `--spl-offset`; no reutilice el valor anterior sin
+comprobarlo.
+
+### Ponderación, zonas y unidades
+
+- **Z:** nivel total sin ponderación de frecuencia.
+- **A:** nivel total con ponderación A, que atenúa graves y agudos para aproximar
+  la sensibilidad del oído humano.
+
+Z/A se aplica al **nivel total**. La curva FFT de entrada solo recibe el offset
+cuando se muestra en dB SPL; no se le aplica la ponderación Z/A. La salida, el
+espectrograma, los medidores de pico/RMS y la indicación `CLIP` permanecen
+siempre en dBFS.
+
+Con ponderación A, el nivel total usa estas zonas de color: **verde** por debajo
+de 70 dB SPL, **amarillo** entre 70 y 85 dB SPL, ambos incluidos, y **rojo** por
+encima de 85 dB SPL. Como contexto aproximado:
+
+| Sonido | Nivel orientativo |
+|---|---:|
+| Susurro | ~30 dB SPL |
+| Conversación | ~60 dB SPL |
+| Calle | ~80 dB SPL |
+| Grito | ~90 dB SPL o más |
+
+La precisión de las lecturas depende de la referencia utilizada, la ganancia y el
+dispositivo de entrada. Una calibración solo es representativa de la cadena con
+la que se midió.
+
 ## Pruebas automatizadas
 
 ```powershell
@@ -149,11 +214,18 @@ src/audio/engine.py           Stream full-duplex, ecualizador y calibración.
 src/dsp/inverse_filter.py     Filtro inverso Wiener/Tikhonov y procesador WOLA.
 src/dsp/numerics.py           Métodos numéricos y métricas académicas.
 analisis_numerico.py          Comparación analítica/gradiente y linealidad.
-src/dsp/spectrum.py           Espectro, niveles y ganancia en dB.
-src/ui/window.py              Ventana principal: gráfica, panel y refresco.
-src/ui/controls.py            Panel de control.
+src/dsp/spectrum.py           Espectro, niveles, ponderación Z/A y conversión dBFS/dB SPL.
+src/ui/calibration.py         Asistente QDialog de calibración SPL en tres pasos.
+src/ui/window.py              Ventana principal e integración de la calibración SPL.
+src/ui/controls.py            Panel de control y acciones SPL.
 src/ui/meters.py              Medidores de nivel e indicador de saturación.
 src/ui/spectrogram.py         Cascada temporal.
-src/ui/readout.py             Lectura de valores bajo el cursor.
+src/ui/readout.py             Lectura de valores bajo el cursor en dBFS/dB SPL.
+src/ui/spl_context.py         Contexto físico y zonas de color para niveles SPL.
+src/ui/spl_persistence.py     Persistencia JSON y detección de la entrada calibrada.
 src/ui/theme.py               Paleta de la interfaz.
+tests/test_spl.py             Conversión, ponderación y presentación de niveles SPL.
+tests/test_spl_calibration_dialog.py  Flujo y validaciones del asistente SPL.
+tests/test_spl_context.py     Contexto físico y límites de las zonas de color.
+tests/test_spl_persistence.py Persistencia, carga inicial y prioridad del offset CLI.
 ```

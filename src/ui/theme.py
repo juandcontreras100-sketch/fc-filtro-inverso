@@ -19,14 +19,19 @@ GRID = "#262b38"
 TEXT = "#eef1f7"
 MUTED = "#949db3"
 
+# Colores de zonas SPL
+SPL_SAFE = "#2ed573"
+SPL_WARNING = "#ffa502"
+SPL_DANGER = "#ff4757"
+
 # Acentos semanticos de senal y estado
 INPUT = "#ff9f43"
 INPUT_FILL = (255, 159, 67, 28)
-OUTPUT = "#2ed573"
+OUTPUT = SPL_SAFE
 OUTPUT_FILL = (46, 213, 115, 28)
 FILTER = "#5f7cfa"
-CLIP = "#ff4757"
-WARNING = "#ffa502"
+CLIP = SPL_DANGER
+WARNING = SPL_WARNING
 CURSOR = "#f5f7fa"
 PEAK = "#ffffff"
 

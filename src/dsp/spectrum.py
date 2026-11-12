@@ -9,6 +9,16 @@ DB_CEILING = 6.0
 CLIP_DB = -0.1
 CLIP_THRESHOLD = 10.0 ** (CLIP_DB / 20.0)
 
+# Centros nominales ISO 266 de 25 Hz a 20 kHz.
+_THIRD_OCTAVE_CENTERS_HZ = np.array(
+    [
+        25.0, 31.5, 40.0, 50.0, 63.0, 80.0, 100.0, 125.0, 160.0, 200.0,
+        250.0, 315.0, 400.0, 500.0, 630.0, 800.0, 1000.0, 1250.0, 1600.0,
+        2000.0, 2500.0, 3150.0, 4000.0, 5000.0, 6300.0, 8000.0, 10000.0,
+        12500.0, 16000.0, 20000.0,
+    ]
+)
+
 
 def dbfs_to_spl(
     values_db: float | np.ndarray,
@@ -118,3 +128,44 @@ def gain_db(transfer: np.ndarray, db_floor: float = DB_FLOOR) -> np.ndarray:
     """Magnitud de una respuesta compleja expresada en dB."""
     magnitude = np.abs(np.asarray(transfer))
     return np.maximum(20.0 * np.log10(np.maximum(magnitude, 1e-12)), db_floor)
+
+
+def third_octave_bands(
+    levels_db: np.ndarray,
+    frequencies_hz: np.ndarray,
+    db_floor: float = DB_FLOOR,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Agrupa un espectro en dB por bandas de 1/3 de octava.
+
+    Usa los centros nominales ISO de 25 Hz a 20 kHz que quedan por debajo de
+    Nyquist (la frecuencia del ultimo bin). Cada banda cubre
+    ``centro * 2**(+-1/6)`` y su nivel es la media de potencia de los bins que
+    caen dentro, con suelo en ``db_floor``. Las bandas sin ningun bin se
+    omiten, algo frecuente en graves cuando la FFT es pequena; el bin de DC
+    (0 Hz) no cae en ninguna banda.
+
+    Devuelve ``(centros_hz, niveles_db)``.
+    """
+    levels = np.asarray(levels_db, dtype=np.float64)
+    frequencies = np.asarray(frequencies_hz, dtype=np.float64)
+    if frequencies.size == 0:
+        empty = np.zeros(0, dtype=np.float64)
+        return empty, np.zeros(0, dtype=np.float64)
+
+    nyquist = float(frequencies[-1])
+    centers = _THIRD_OCTAVE_CENTERS_HZ[_THIRD_OCTAVE_CENTERS_HZ < nyquist]
+    lower_edges = centers * 2.0 ** (-1.0 / 6.0)
+    upper_edges = centers * 2.0 ** (1.0 / 6.0)
+    kept_centers: list[float] = []
+    kept_levels: list[float] = []
+    for center, lower, upper in zip(centers, lower_edges, upper_edges):
+        mask = (frequencies >= lower) & (frequencies < upper)
+        if not np.any(mask):
+            continue
+        power = float(np.mean(np.power(10.0, levels[mask] / 10.0)))
+        kept_centers.append(float(center))
+        kept_levels.append(max(10.0 * np.log10(max(power, 1e-12)), db_floor))
+    return (
+        np.asarray(kept_centers, dtype=np.float64),
+        np.asarray(kept_levels, dtype=np.float64),
+    )

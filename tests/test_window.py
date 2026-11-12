@@ -79,14 +79,24 @@ class MainWindowTests(unittest.TestCase):
         self.window.engine.bypass = True
         self.window._update_mode_status()
         self.assertEqual(self.window.controls.status_state, "bypass")
+        self.assertEqual(self.window.controls.status_label.text(), "Bypass")
 
         self.window.engine.bypass = False
         self.window.engine.h_response = None
         self.window._update_mode_status()
         self.assertEqual(self.window.controls.status_state, "warning")
+        self.assertEqual(self.window.controls.status_label.text(), "Sin calibracion")
 
         self.window.engine.h_response = np.ones(
             self.window.engine.bin_count, dtype=np.complex128
         )
         self.window._update_mode_status()
         self.assertEqual(self.window.controls.status_state, "active")
+        self.assertEqual(self.window.controls.status_label.text(), "Ecualizado +12 dB")
+        self.assertFalse(self.window.controls.status_label.wordWrap())
+
+    def test_session_actions_stay_visible_outside_the_scroll(self):
+        self.assertIsNot(
+            self.window.controls.session_box.parent(),
+            self.window.controls,
+        )

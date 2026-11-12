@@ -21,6 +21,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from src.ui.spl_persistence import input_device_name, load_spl_calibration
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -53,6 +55,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--epsilon-base", type=float, default=0.02)
     parser.add_argument("--max-gain-db", type=float, default=12.0)
+    parser.add_argument("--spl-offset", type=float, default=None)
     return parser.parse_args()
 
 
@@ -68,6 +71,37 @@ def available_devices() -> list[tuple[Any, str]]:
     from src.audio.devices import available_devices as _available_devices
 
     return _available_devices()
+
+
+def apply_spl_calibration(
+    engine: Any,
+    spl_offset: float | None,
+    device: Any,
+    qt_widgets: Any,
+) -> None:
+    """Aplica el offset de CLI o del archivo, en ese orden de prioridad."""
+    if spl_offset is not None:
+        engine.spl_offset_db = spl_offset
+        return
+
+    try:
+        calibration = load_spl_calibration()
+    except ValueError as error:
+        print(f"No se pudo cargar la calibracion SPL: {error}", file=sys.stderr)
+        return
+    if calibration is None:
+        return
+
+    engine.spl_offset_db = calibration.offset_db
+    current_device = input_device_name(device)
+    if current_device != calibration.device_name:
+        qt_widgets.QMessageBox.warning(
+            None,
+            "Calibracion SPL",
+            f"La calibracion SPL se hizo con '{calibration.device_name}', "
+            f"pero la entrada actual es '{current_device}'. Se conservara el "
+            "offset, pero debe recalibrar para obtener mediciones correctas.",
+        )
 
 
 def main() -> int:
@@ -125,6 +159,7 @@ def main() -> int:
         engine.recompute_inverse()
 
     app = pg.mkQApp("Ecualizador FFT")
+    apply_spl_calibration(engine, args.spl_offset, device, QtWidgets)
     window = MainWindow(engine)
     window.controls.populate_devices(available_devices())
     window.controls.set_device(engine.device)

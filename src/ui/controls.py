@@ -18,6 +18,7 @@ class ControlPanel(QtWidgets.QWidget):
 
     modeChanged = QtCore.Signal(bool)  # True = bypass
     calibrationRequested = QtCore.Signal()
+    splCalibrationRequested = QtCore.Signal()
     clearCalibrationRequested = QtCore.Signal()
     gainChanged = QtCore.Signal(float)
     epsilonChanged = QtCore.Signal(float)
@@ -28,6 +29,7 @@ class ControlPanel(QtWidgets.QWidget):
     splDisplayToggled = QtCore.Signal(bool)
     splOffsetChanged = QtCore.Signal(float)
     weightingChanged = QtCore.Signal(str)
+    spectrumStyleChanged = QtCore.Signal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -41,10 +43,12 @@ class ControlPanel(QtWidgets.QWidget):
         root.addWidget(self._build_mode_group())
         root.addWidget(self._build_calibration_group())
         root.addWidget(self._build_filter_group())
-        root.addWidget(self._build_spl_group())
         root.addWidget(self._build_stream_group())
-        root.addWidget(self._build_session_group())
+        root.addWidget(self._build_spl_group())
+        root.addWidget(self._build_view_group())
         root.addStretch(1)
+        # La ventana lo ancla fuera del scroll para que Grabar/Exportar no se pierdan.
+        self.session_box = self._build_session_group()
 
         self.setMinimumWidth(280)
         self.setMaximumWidth(360)
@@ -68,8 +72,8 @@ class ControlPanel(QtWidgets.QWidget):
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         form.addRow("Operacion", self.mode_combo)
 
-        self.status_label = QtWidgets.QLabel("Sin calibracion cargada")
-        self.status_label.setWordWrap(True)
+        self.status_label = QtWidgets.QLabel("Bypass")
+        self.status_label.setWordWrap(False)
         self.status_label.setAlignment(QtCore.Qt.AlignCenter)
         self.status_label.setStyleSheet(theme.status_badge_style("bypass"))
         form.addRow("Estado", self.status_label)
@@ -139,7 +143,17 @@ class ControlPanel(QtWidgets.QWidget):
         return box
 
     def _build_spl_group(self) -> QtWidgets.QGroupBox:
-        box, form = self._group("4. Entrada SPL")
+        box, form = self._group("5. Entrada SPL")
+
+        self.spl_calibration_button = QtWidgets.QPushButton("Calibrar SPL...")
+        self.spl_calibration_button.setToolTip("Medir la entrada para calibrar dB SPL")
+        self.spl_calibration_button.clicked.connect(self.splCalibrationRequested.emit)
+        form.addRow(self.spl_calibration_button)
+
+        self.spl_status_label = QtWidgets.QLabel("SIN CALIBRAR: valores en dBFS")
+        self.spl_status_label.setWordWrap(True)
+        self.spl_status_label.setStyleSheet(f"color: {theme.WARNING};")
+        form.addRow(self.spl_status_label)
 
         self.spl_checkbox = QtWidgets.QCheckBox("Mostrar entrada en dB SPL")
         self.spl_checkbox.setToolTip("La relacion es: dB SPL = dBFS + offset")
@@ -170,15 +184,17 @@ class ControlPanel(QtWidgets.QWidget):
         self.total_level_label.setToolTip("Nivel RMS total del ultimo bloque de entrada")
         self.total_level_label.setFont(theme.mono_font(10, bold=True))
         self.total_level_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        self.total_level_label.setStyleSheet(
-            f"background-color: {theme.SURFACE}; border: 1px solid {theme.PANEL_EDGE}; "
-            f"border-radius: 4px; padding: 3px 8px; color: {theme.INPUT};"
-        )
+        self.set_total_level_color()
         form.addRow("Nivel total", self.total_level_label)
+
+        self.spl_context_label = QtWidgets.QLabel("")
+        self.spl_context_label.setWordWrap(True)
+        self.spl_context_label.setStyleSheet(f"color: {theme.MUTED};")
+        form.addRow("Contexto", self.spl_context_label)
         return box
 
     def _build_stream_group(self) -> QtWidgets.QGroupBox:
-        box, form = self._group("5. Dispositivo")
+        box, form = self._group("4. Dispositivo")
 
         self.device_combo = QtWidgets.QComboBox()
         self.device_combo.currentIndexChanged.connect(self._on_device_changed)
@@ -226,6 +242,21 @@ class ControlPanel(QtWidgets.QWidget):
         actions.addWidget(self.record_button, 1)
         actions.addWidget(self.export_button, 1)
         form.addRow(actions)
+        return box
+
+    def _build_view_group(self) -> QtWidgets.QGroupBox:
+        box, form = self._group("7. Vista")
+
+        self.spectrum_combo = QtWidgets.QComboBox()
+        self.spectrum_combo.addItem("Linea", "linea")
+        self.spectrum_combo.addItem("Barras 1/3 oct", "barras")
+        self.spectrum_combo.setToolTip(
+            "Presentacion del espectro: curvas continuas o bandas de 1/3 de octava"
+        )
+        self.spectrum_combo.currentIndexChanged.connect(
+            self._on_spectrum_style_changed
+        )
+        form.addRow("Espectro", self.spectrum_combo)
         return box
 
     # ------------------------------------------------------------- estados
@@ -298,12 +329,31 @@ class ControlPanel(QtWidgets.QWidget):
         finally:
             self._building = False
 
+    def set_spl_calibration(self, offset_db: float | None) -> None:
+        """Sincroniza el aviso de calibracion sin emitir senales."""
+        self.spl_status_label.setVisible(offset_db is None)
+
+    def set_total_level_color(self, color: str | None = None) -> None:
+        self.total_level_label.setStyleSheet(
+            f"background-color: {theme.SURFACE}; border: 1px solid {theme.PANEL_EDGE}; "
+            f"border-radius: 4px; padding: 3px 8px; color: {color or theme.INPUT};"
+        )
+
     def set_weighting(self, weighting: str) -> None:
         self._building = True
         try:
             index = self.weighting_combo.findData(weighting)
             if index >= 0:
                 self.weighting_combo.setCurrentIndex(index)
+        finally:
+            self._building = False
+
+    def set_spectrum_style(self, style: str) -> None:
+        self._building = True
+        try:
+            index = self.spectrum_combo.findData(style)
+            if index >= 0:
+                self.spectrum_combo.setCurrentIndex(index)
         finally:
             self._building = False
 
@@ -379,6 +429,11 @@ class ControlPanel(QtWidgets.QWidget):
         if self._building:
             return
         self.weightingChanged.emit(str(self.weighting_combo.currentData()))
+
+    def _on_spectrum_style_changed(self, _index: int) -> None:
+        if self._building:
+            return
+        self.spectrumStyleChanged.emit(str(self.spectrum_combo.currentData()))
 
     def _on_record_toggled(self, recording: bool) -> None:
         self.record_button.setText("Detener" if recording else "Grabar")
