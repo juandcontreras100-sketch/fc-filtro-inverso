@@ -40,11 +40,18 @@ class CalibrationDiscardedError(ValueError):
 
 @dataclass(frozen=True)
 class SpectrumFrame:
-    """Una captura para la GUI; nunca se modifica desde el callback."""
+    """Una captura para la GUI; nunca se modifica desde el callback.
+
+    ``input_samples`` y ``output_samples`` son el hop alineado que se usa para
+    medir niveles. ``input_window`` y ``output_window`` contienen las ultimas
+    ``fft_size`` muestras contiguas (sin huecos) para calcular el espectro.
+    """
 
     input_samples: np.ndarray
     output_samples: np.ndarray
     would_clip: bool = False
+    input_window: np.ndarray | None = None
+    output_window: np.ndarray | None = None
 
 
 def put_latest(target: "queue.Queue[Any]", item: Any) -> None:
@@ -87,6 +94,9 @@ class AudioEngine:
         self.bypass = True
         self.max_gain_db = 12.0
         self.epsilon_base = 0.02
+        # Estado de presentacion de la entrada; el callback nunca lo consulta.
+        self.spl_offset_db: float | None = None
+        self.weighting: str = "Z"
         # Limitador suave antes del DAC; solo se apaga para medir el filtro puro.
         self.limiter_enabled = True
 
@@ -106,7 +116,7 @@ class AudioEngine:
 
         self._stream: Any = None
         self.equalizer = self._create_equalizer()
-        self._pending_display_input = np.zeros(self.hop_size, dtype=np.float64)
+        self._reset_display_buffers()
 
     # ------------------------------------------------------------------ estado
     @property
@@ -139,6 +149,36 @@ class AudioEngine:
             h_inverse=np.ones(self.bin_count, dtype=np.complex128),
             fft_size=self.fft_size,
         )
+
+    def _reset_display_buffers(self) -> None:
+        """Preasigna los buffers circulares que alimentan los espectros."""
+        self._pending_display_input = np.zeros(self.hop_size, dtype=np.float64)
+        self._input_ring = np.zeros(self.fft_size, dtype=np.float64)
+        self._output_ring = np.zeros(self.fft_size, dtype=np.float64)
+        self._input_ring_write = 0
+        self._output_ring_write = 0
+        self._input_window = np.zeros(self.fft_size, dtype=np.float64)
+        self._output_window = np.zeros(self.fft_size, dtype=np.float64)
+
+    @staticmethod
+    def _write_ring(ring: np.ndarray, write: int, samples: np.ndarray) -> int:
+        """Copia ``samples`` al buffer circular sin reservar memoria."""
+        end = write + samples.size
+        if end <= ring.size:
+            ring[write:end] = samples
+        else:
+            split = ring.size - write
+            ring[write:] = samples[:split]
+            ring[: end - ring.size] = samples[split:]
+        return end % ring.size
+
+    @staticmethod
+    def _snapshot_ring(ring: np.ndarray, start: int, target: np.ndarray) -> np.ndarray:
+        """Devuelve una copia ordenada (mas antigua primero) del anillo."""
+        tail = ring.size - start
+        target[:tail] = ring[start:]
+        target[tail:] = ring[:start]
+        return target.copy()
 
     # ------------------------------------------------------------- calibracion
     def load_calibration(
@@ -300,7 +340,7 @@ class AudioEngine:
         """Cierra y vuelve a abrir el stream con el formato vigente."""
         self.close()
         self.equalizer.reset()
-        self._pending_display_input = np.zeros(self.hop_size, dtype=np.float64)
+        self._reset_display_buffers()
         self.open()
 
     # ---------------------------------------------------------------- callback
@@ -356,7 +396,7 @@ class AudioEngine:
             # muestras antiguas si el backend incumple el contrato.
             outdata.fill(0.0)
             self.equalizer.reset()
-            self._pending_display_input.fill(0.0)
+            self._reset_display_buffers()
             put_latest(self.status_queue, f"bloque inesperado: {frames} muestras")
             return
 
@@ -368,13 +408,30 @@ class AudioEngine:
         if not np.all(np.isfinite(output_block)):
             outdata.fill(0.0)
             self.equalizer.reset()
-            self._pending_display_input.fill(0.0)
+            self._reset_display_buffers()
             put_latest(self.status_queue, "Salida NaN/Inf: bloque silenciado")
             return
 
         aligned_input = self._pending_display_input
         self._pending_display_input = input_block.copy()
         would_clip = bool(np.max(np.abs(output_block)) >= CLIP_THRESHOLD)
+
+        # Anillos preasignados: la GUI recibe siempre la ultima ventana
+        # completa de fft_size muestras, sin depender de que no se pierda
+        # ningun frame en la cola.
+        self._input_ring_write = self._write_ring(
+            self._input_ring, self._input_ring_write, aligned_input
+        )
+        self._output_ring_write = self._write_ring(
+            self._output_ring, self._output_ring_write, output_block
+        )
+        input_window = self._snapshot_ring(
+            self._input_ring, self._input_ring_write, self._input_window
+        )
+        output_window = self._snapshot_ring(
+            self._output_ring, self._output_ring_write, self._output_window
+        )
+
         playback = (
             soft_limit(output_block, LIMITER_THRESHOLD, OUTPUT_CEILING)
             if self.limiter_enabled
@@ -387,5 +444,7 @@ class AudioEngine:
                 input_samples=aligned_input,
                 output_samples=output_block.copy(),
                 would_clip=would_clip,
+                input_window=input_window,
+                output_window=output_window,
             ),
         )
