@@ -22,7 +22,8 @@ from src.config import FREQUENCY_MAX_HZ, FREQUENCY_MIN_HZ
 from src.dsp.spectrum import (
     DB_CEILING,
     DB_FLOOR,
-    dbfs_to_spl,
+    DB_FULL_SCALE,
+    db_to_spl,
     gain_db,
     level_db,
     spectrum_db,
@@ -43,6 +44,8 @@ REFRESH_MS = 33  # ~30 FPS
 BAND_BAR_WIDTH = 0.8  # ancho de las barras de 1/3 de octava, en indices de banda
 # Ancho fijo de los ejes: alinea los titulos de las tres graficas.
 AXIS_WIDTH = 66
+# Rango inicial de las curvas de ganancia (ganancia unitaria = DB_FULL_SCALE).
+GAIN_VIEW_MIN_DB = DB_FULL_SCALE - 60.0
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -183,7 +186,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.input_plot = self.graphics.addPlot(title="Entrada: senal captada")
         theme.style_plot(self.input_plot, "Entrada: senal captada")
         self.input_plot.setLogMode(x=True, y=False)
-        self.input_plot.setLabel("left", "Magnitud", units="dBFS")
+        self.input_plot.setLabel("left", "Magnitud", units="dB")
         self.input_plot.setLabel("bottom", "Frecuencia", units="kHz")
         self.input_plot.setYRange(DB_FLOOR, DB_CEILING, padding=0)
         self.input_plot.showGrid(x=True, y=True, alpha=0.22)
@@ -207,7 +210,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.output_plot = self.graphics.addPlot(title="Salida: senal ecualizada")
         theme.style_plot(self.output_plot, "Salida: senal ecualizada")
         self.output_plot.setLogMode(x=True, y=False)
-        self.output_plot.setLabel("left", "Magnitud", units="dBFS")
+        self.output_plot.setLabel("left", "Magnitud", units="dB")
         self.output_plot.setLabel("bottom", "Frecuencia", units="kHz")
         self.output_plot.setYRange(DB_FLOOR, DB_CEILING, padding=0)
         self.output_plot.showGrid(x=True, y=True, alpha=0.22)
@@ -227,7 +230,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.filter_view.setXLink(self.output_plot)
         self.filter_view.setLogMode("x", True)
         self.filter_view.setMouseEnabled(x=False, y=False)
-        self.filter_view.setYRange(-60.0, 6.0, padding=0)
+        self.filter_view.setYRange(GAIN_VIEW_MIN_DB, DB_CEILING, padding=0)
         self.output_plot.getViewBox().sigResized.connect(
             self._update_filter_view_geometry
         )
@@ -259,11 +262,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.response_plot.setLogMode(x=True, y=False)
         self.response_plot.setXLink(self.input_plot)
         self.response_plot.showGrid(x=True, y=True, alpha=0.22)
-        self.response_plot.setYRange(-60.0, 6.0, padding=0)
+        self.response_plot.setYRange(GAIN_VIEW_MIN_DB, DB_CEILING, padding=0)
         self.compare_plot = self.response_plot
 
         self.response_zero_line = pg.InfiniteLine(
-            pos=0.0, angle=0, pen=pg.mkPen(theme.MUTED, width=1)
+            pos=DB_FULL_SCALE, angle=0, pen=pg.mkPen(theme.MUTED, width=1)
         )
         self.response_plot.addItem(self.response_zero_line)
         self.response_message = pg.TextItem(
@@ -347,7 +350,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     {
                         "name": "entrada",
                         "color": theme.INPUT,
-                        "data": "entrada_dbfs",
+                        "data": "entrada_sin_calibrar",
                     },
                     {"name": "salida", "color": theme.OUTPUT},
                 ],
@@ -466,10 +469,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_input_level_axis(self) -> None:
         offset = self._active_spl_offset()
         if offset is None:
-            lower, upper, unit = DB_FLOOR, DB_CEILING, "dBFS"
+            lower, upper, unit = DB_FLOOR, DB_CEILING, "dB"
         else:
-            lower = max(0.0, DB_FLOOR + offset)
-            upper = DB_CEILING + offset
+            lower = max(0.0, float(db_to_spl(DB_FLOOR, offset)))
+            upper = float(db_to_spl(DB_CEILING, offset))
             unit = "dB SPL"
         self.input_plot.setLabel("left", "Magnitud", units=unit)
         self.input_plot.setLimits(yMin=lower, yMax=upper)
@@ -481,10 +484,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_band_display()
             return
         input_values = self._input_db
-        input_unit = "dBFS"
+        input_unit = "dB"
         offset = self._active_spl_offset()
         if offset is not None:
-            input_values = dbfs_to_spl(input_values, offset)
+            input_values = db_to_spl(input_values, offset)
             input_unit = "dB SPL"
         if input_values.size == self._frequencies.size:
             self.input_curve.setData(
@@ -504,11 +507,11 @@ class MainWindow(QtWidgets.QMainWindow):
             "salida": self._output_db,
             "filtro": self._filter_db,
         }
-        units = {"entrada": input_unit, "salida": "dBFS", "filtro": "dB"}
-        if input_unit != "dBFS":
-            # La comparacion siempre muestra la entrada en dBFS.
-            spectra["entrada_dbfs"] = self._input_db
-            units["entrada_dbfs"] = "dBFS"
+        units = {"entrada": input_unit, "salida": "dB", "filtro": "dB"}
+        if offset is not None:
+            # La comparacion siempre muestra la entrada sin calibrar.
+            spectra["entrada_sin_calibrar"] = self._input_db
+            units["entrada_sin_calibrar"] = "dB"
         if self.engine.is_calibrated:
             spectra.update(
                 {
@@ -534,7 +537,11 @@ class MainWindow(QtWidgets.QMainWindow):
                     values = spectra[key].copy()
                     values[~valid] = np.nan
                     spectra[key] = values
-        names = {"entrada_dbfs": "entrada (dBFS)"} if "entrada_dbfs" in spectra else None
+        names = (
+            {"entrada_sin_calibrar": "entrada (sin calibrar)"}
+            if "entrada_sin_calibrar" in spectra
+            else None
+        )
         self.readout.set_spectra(
             self._frequencies, spectra, units=units, names=names
         )
@@ -619,7 +626,7 @@ class MainWindow(QtWidgets.QMainWindow):
         input_values = self._input_db
         offset = self._active_spl_offset()
         if offset is not None:
-            input_values = dbfs_to_spl(input_values, offset)
+            input_values = db_to_spl(input_values, offset)
         centers, input_levels = third_octave_bands(input_values, self._frequencies)
         _centers, output_levels = third_octave_bands(
             self._output_db, self._frequencies
@@ -635,7 +642,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.compare_output_curve.setData(indices, output_levels)
         if filter_levels.size:
             lower = min(DB_FLOOR, float(np.min(filter_levels)) - 3.0)
-            upper = max(6.0, float(np.max(filter_levels)) + 3.0)
+            upper = max(DB_CEILING, float(np.max(filter_levels)) + 3.0)
             self.filter_view.setYRange(lower, upper, padding=0)
         if not np.array_equal(centers, self._band_centers):
             self._band_centers = centers
@@ -666,12 +673,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.controls.set_total_level_color()
             return
         value = self._input_total_db
-        unit = "dBFS"
+        unit = "dB"
         context = ""
         color: str | None = None
         offset = self._active_spl_offset()
         if offset is not None:
-            value = dbfs_to_spl(value, offset)
+            value = db_to_spl(value, offset)
             unit = "dB SPL"
             context = spl_context_text(value)
             if self.engine.weighting == "A":
@@ -962,7 +969,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._frequencies[1:] / 1_000.0, self._filter_db[1:]
             )
             lower = min(DB_FLOOR, float(np.min(self._filter_db)) - 3.0)
-            upper = max(6.0, float(np.max(self._filter_db)) + 3.0)
+            upper = max(DB_CEILING, float(np.max(self._filter_db)) + 3.0)
             self.filter_view.setYRange(lower, upper, padding=0)
 
     def _update_response_curves(self) -> None:
@@ -1049,8 +1056,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if nonempty:
             all_values = np.concatenate(nonempty)
             self.response_plot.setYRange(
-                min(-60.0, float(np.min(all_values)) - 3.0),
-                max(6.0, float(np.max(all_values)) + 3.0),
+                min(GAIN_VIEW_MIN_DB, float(np.min(all_values)) - 3.0),
+                max(DB_CEILING, float(np.max(all_values)) + 3.0),
                 padding=0,
             )
         self._apply_third_plot_mode()
@@ -1079,9 +1086,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
             title = f"{title} · {provenance}"
         self.response_plot.setTitle(title, color=theme.TEXT, size="10pt")
-        self.response_plot.setLabel(
-            "left", "Magnitud", units="dB" if response_mode else "dBFS"
-        )
+        self.response_plot.setLabel("left", "Magnitud", units="dB")
         self.response_zero_line.setVisible(response_mode)
         self.response_message.setVisible(response_mode and not calibrated)
         self.response_measured_curve.setVisible(response_mode and calibrated)
@@ -1203,13 +1208,13 @@ class MainWindow(QtWidgets.QMainWindow):
             "input_db": column(self._input_db, DB_FLOOR),
             "output_db": column(self._output_db, DB_FLOOR),
             "h_measured_db": (
-                column(self._measured_db, 0.0) if has_calibration else None
+                column(self._measured_db, DB_FULL_SCALE) if has_calibration else None
             ),
             "h_inverse_db": (
-                column(self._inverse_db, 0.0) if has_calibration else None
+                column(self._inverse_db, DB_FULL_SCALE) if has_calibration else None
             ),
             "h_product_db": (
-                column(self._product_db, 0.0) if has_calibration else None
+                column(self._product_db, DB_FULL_SCALE) if has_calibration else None
             ),
         }
         provenance = (

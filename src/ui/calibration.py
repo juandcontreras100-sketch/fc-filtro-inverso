@@ -5,12 +5,12 @@ from __future__ import annotations
 import numpy as np
 from PySide6 import QtWidgets
 
-from src.dsp.spectrum import level_db
+from src.dsp.spectrum import DB_FULL_SCALE, level_db
 from src.ui import theme
 
 
 class CalibrationDialog(QtWidgets.QDialog):
-    """Mide una referencia estable y calcula el offset de dBFS a SPL."""
+    """Mide una referencia estable y calcula el SPL de la plena escala digital."""
 
     def __init__(
         self,
@@ -186,13 +186,13 @@ class CalibrationDialog(QtWidgets.QDialog):
         total_rms_db, peak_db = level_db(samples)
         variation_db = max(self._block_rms_db) - min(self._block_rms_db)
 
-        if total_rms_db <= -70.0:
+        if total_rms_db <= DB_FULL_SCALE - 70.0:
             self._reject_measurement(
                 "El nivel es demasiado bajo. Sube la ganancia o acerca la "
                 "referencia y vuelve a medir."
             )
             return
-        if peak_db >= -1.0:
+        if peak_db >= DB_FULL_SCALE - 1.0:
             self._reject_measurement(
                 "La senal tiene saturacion. Baja la ganancia para evitar la "
                 "saturacion y vuelve a medir."
@@ -205,11 +205,13 @@ class CalibrationDialog(QtWidgets.QDialog):
             )
             return
 
-        self.offset_db = float(self.reference_spin.value()) - total_rms_db
+        self.offset_db = (
+            float(self.reference_spin.value()) - total_rms_db + DB_FULL_SCALE
+        )
         self._measurement_valid = True
         self.result_label.setText(
             f"Offset resultante: {self.offset_db:.2f} dB\n"
-            f"Nivel RMS medido: {total_rms_db:.2f} dBFS\n"
+            f"Nivel RMS medido: {total_rms_db:.2f} dB\n"
             f"Referencia: {self.reference_spin.value():.1f} dB SPL"
         )
         self.status_label.setText(

@@ -7,6 +7,7 @@ import numpy as np
 import pyqtgraph as pg
 
 from src.audio.engine import AudioEngine
+from src.dsp.spectrum import DB_CEILING
 from src.storage.profiles import UserProfile
 from src.ui import theme, window as window_module
 from src.ui.window import AXIS_WIDTH, MainWindow
@@ -84,7 +85,7 @@ class MainWindowTests(unittest.TestCase):
         self.assertIn("dB", right_axis.labelUnits)
         self.assertIsNot(self.window.filter_view, self.window.output_plot.getViewBox())
 
-    def test_filter_curve_can_show_gain_above_the_signal_dbfs_range(self):
+    def test_filter_curve_can_show_gain_above_the_signal_db_range(self):
         self.window.engine.equalizer.h_inverse = np.full(
             self.window.engine.bin_count, 10.0, dtype=np.complex128
         )
@@ -94,7 +95,7 @@ class MainWindowTests(unittest.TestCase):
         _frequencies, values = self.window.filter_curve.getData()
         minimum, maximum = self.window.filter_view.viewRange()[1]
 
-        self.assertGreater(float(np.max(values)), 6.0)
+        self.assertGreater(float(np.max(values)), DB_CEILING)
         self.assertLessEqual(minimum, float(np.min(values)))
         self.assertGreaterEqual(maximum, float(np.max(values)))
 
@@ -128,11 +129,11 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(self.window.response_message.isVisible())
         self.assertFalse(self.window.compare_input_curve.isVisible())
 
-    def test_comparison_mode_shows_input_and_output_in_dbfs(self):
+    def test_comparison_mode_shows_input_and_output_in_db(self):
         combo = self.window.controls.third_plot_combo
         combo.setCurrentIndex(combo.findData("comparacion"))
 
-        self.assertEqual(self.window.response_plot.getAxis("left").labelUnits, "dBFS")
+        self.assertEqual(self.window.response_plot.getAxis("left").labelUnits, "dB")
         self.assertTrue(self.window.compare_input_curve.isVisible())
         self.assertTrue(self.window.compare_output_curve.isVisible())
         self.assertFalse(self.window.response_message.isVisible())

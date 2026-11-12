@@ -11,7 +11,7 @@ ciegas.
 - Endpoints observados: **Micrófono (USB PnP Sound Device)** como entrada y
   **Altavoces (USB PnP Sound Device)** como salida.
 - La entrada acepta 48 kHz; el nivel de Windows estuvo al 100 %, sin mute.
-- La captura más reciente de la entrada dio **−94,90 dBFS**; no se demostró
+- La captura más reciente de la entrada dio **45,10 dB**; no se demostró
   una señal útil.
 - El loopback verde→rosa falló: no apareció la componente de 1 kHz esperada.
 - Windows no mostró **COM5** ni un CP2102. Los COM visibles eran COM3 y COM4,

@@ -13,14 +13,14 @@ import pyqtgraph as pg
 from src.ui import theme
 
 from src.config import (
-    DBFS_CEILING_DB,
-    DBFS_FLOOR_DB,
+    DB_CEILING_DB,
+    DB_FLOOR_DB,
     FREQUENCY_MAX_HZ,
     FREQUENCY_MIN_HZ,
 )
 
-DB_FLOOR = DBFS_FLOOR_DB
-DB_CEILING = DBFS_CEILING_DB
+DB_FLOOR = DB_FLOOR_DB
+DB_CEILING = DB_CEILING_DB
 
 
 class SpectrogramWidget(pg.GraphicsLayoutWidget):
@@ -56,7 +56,7 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
             values=(DB_FLOOR, DB_CEILING),
             limits=(DB_FLOOR, DB_CEILING),
         )
-        self._colorbar.setLabel("right", "Nivel", units="dBFS")
+        self._colorbar.setLabel("right", "Nivel", units="dB")
         self._colorbar.setMaximumWidth(70)
 
     # --------------------------------------------------------------- formato

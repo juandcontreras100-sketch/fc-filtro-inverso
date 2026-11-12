@@ -10,7 +10,7 @@ real, no la medición sintética actual.
 ## Estado conocido
 
 - Windows reconoce el PCM2902 como `USB PnP Sound Device` (entrada y salida).
-- La entrada reciente fue silencio: aproximadamente −96 dBFS.
+- La entrada reciente fue silencio: aproximadamente 44 dB.
 - El loopback PCM2902 (salida verde a entrada rosa) tampoco detectó el tono de
   1 kHz; por tanto, todavía no se puede atribuir el fallo a la protoboard.
 - La topología de la protoboard no está confirmada: modelo/orientación del CI,
@@ -64,7 +64,7 @@ Prueba A/B y documentación
 
 ### Punto de control 2
 
-- [ ] Micrófono de la protoboard produce señal útil (> −60 dBFS) sin saturación.
+- [ ] Micrófono de la protoboard produce señal útil (> 80 dB) sin saturación.
 - [ ] Captura de entrada y salida está documentada y repetible a 48 kHz.
 
 ### Fase 3 — Emparejar la medición y el código

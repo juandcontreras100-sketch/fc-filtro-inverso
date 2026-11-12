@@ -8,7 +8,7 @@ Objetivo: entregar las 6 tareas pedidas sin tocar el callback de audio ni
 1. **Cursor compartido con dB**
    - `CursorReadout` mueve las 3 lineas y dibuja marcador + etiqueta por curva.
    - Etiqueta a la izquierda del punto y volteo a la derecha en la mitad derecha.
-   - Soporta dBFS, dB SPL y bandas (`labels=`).
+   - Soporta dB, dB SPL y bandas (`labels=`).
    - Al salir de las graficas se ocultan lineas, marcadores y etiquetas.
    - Tests en `tests/test_controls.py` y compatibilidad con el plot falso.
 
@@ -32,7 +32,7 @@ Objetivo: entregar las 6 tareas pedidas sin tocar el callback de audio ni
 
 5. **Comparacion entrada/salida**
    - Sustituir "Respuesta del filtro" por `compare_plot` con entrada naranja y
-     salida verde superpuestas en dBFS, eje X enlazado y cursor.
+     salida verde superpuestas en dB, eje X enlazado y cursor.
    - Conservar `_measured_db/_inverse_db/_product_db` para el CSV.
    - Actualizar tests de curvas y nombres.
 

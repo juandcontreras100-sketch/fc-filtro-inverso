@@ -7,6 +7,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtWidgets
 
+from src.dsp.spectrum import DB_FULL_SCALE
 from src.ui.calibration import CalibrationDialog
 
 
@@ -29,12 +30,12 @@ class SplCalibrationDialogTests(unittest.TestCase):
         self.dialog.start_button.click()
 
     def _constant_block(self, rms_db, size):
-        amplitude = 10.0 ** (rms_db / 20.0)
+        amplitude = 10.0 ** ((rms_db - DB_FULL_SCALE) / 20.0)
         return np.full(size, amplitude, dtype=np.float64)
 
     def _finish_valid_measurement(self):
         self._start_measurement()
-        self.dialog.add_block(self._constant_block(-26.0, int(self.sample_rate)))
+        self.dialog.add_block(self._constant_block(114.0, int(self.sample_rate)))
 
     def test_dialog_has_three_steps_and_wraps_all_instruction_labels(self):
         self.assertEqual(self.dialog.stacked_widget.count(), 3)
@@ -58,7 +59,7 @@ class SplCalibrationDialogTests(unittest.TestCase):
         accepted = []
         self.dialog.accepted.connect(lambda: accepted.append(True))
         self._start_measurement()
-        block = self._constant_block(-26.0, 250)
+        block = self._constant_block(114.0, 250)
 
         for _ in range(4):
             self.dialog.add_block(block)
@@ -78,8 +79,8 @@ class SplCalibrationDialogTests(unittest.TestCase):
 
         self.assertAlmostEqual(self.dialog.offset_db, 126.0, places=6)
 
-    def test_rms_at_or_below_minus_70_dbfs_is_rejected_with_gain_advice(self):
-        for rms_db in (-70.0, -71.0):
+    def test_rms_at_or_below_70_db_is_rejected_with_gain_advice(self):
+        for rms_db in (70.0, 69.0):
             with self.subTest(rms_db=rms_db):
                 self._start_measurement()
                 self.dialog.add_block(
@@ -91,8 +92,8 @@ class SplCalibrationDialogTests(unittest.TestCase):
                 self.assertIn("Sube la ganancia", self.dialog.status_label.text())
                 self.assertIn("acerca la referencia", self.dialog.status_label.text())
 
-    def test_peak_at_or_above_minus_1_dbfs_is_rejected_with_clipping_advice(self):
-        for peak_db in (-1.0, 0.0):
+    def test_peak_at_or_above_139_db_is_rejected_with_clipping_advice(self):
+        for peak_db in (139.0, 140.0):
             with self.subTest(peak_db=peak_db):
                 self._start_measurement()
                 self.dialog.add_block(
@@ -105,10 +106,10 @@ class SplCalibrationDialogTests(unittest.TestCase):
                 self.assertIn("saturacion", self.dialog.status_label.text())
 
     def test_block_rms_variation_at_or_above_1_db_is_rejected(self):
-        for second_db in (-25.0, -24.0):
+        for second_db in (115.0, 116.0):
             with self.subTest(second_db=second_db):
                 self._start_measurement()
-                self.dialog.add_block(self._constant_block(-26.0, 500))
+                self.dialog.add_block(self._constant_block(114.0, 500))
                 self.dialog.add_block(self._constant_block(second_db, 500))
 
                 self.assertIsNone(self.dialog.offset_db)
@@ -124,7 +125,7 @@ class SplCalibrationDialogTests(unittest.TestCase):
         self.assertNotEqual(self.dialog.result(), QtWidgets.QDialog.Accepted)
 
         self._start_measurement()
-        self.dialog.add_block(self._constant_block(-80.0, int(self.sample_rate)))
+        self.dialog.add_block(self._constant_block(60.0, int(self.sample_rate)))
         self.dialog.accept()
 
         self.assertEqual(accepted, [])
@@ -133,20 +134,20 @@ class SplCalibrationDialogTests(unittest.TestCase):
 
     def test_measurement_requires_one_second_of_samples_and_ignores_idle_blocks(self):
         self.dialog.next_button.click()
-        self.dialog.add_block(self._constant_block(-26.0, int(self.sample_rate)))
+        self.dialog.add_block(self._constant_block(114.0, int(self.sample_rate)))
         self.assertIsNone(self.dialog.offset_db)
         self.assertEqual(self.dialog.stacked_widget.currentIndex(), 1)
 
         self.dialog.start_button.click()
-        self.dialog.add_block(self._constant_block(-26.0, 999))
+        self.dialog.add_block(self._constant_block(114.0, 999))
         self.assertIsNone(self.dialog.offset_db)
         self.assertEqual(self.dialog.stacked_widget.currentIndex(), 1)
 
-        self.dialog.add_block(self._constant_block(-26.0, 1))
+        self.dialog.add_block(self._constant_block(114.0, 1))
         self.assertAlmostEqual(self.dialog.offset_db, 120.0, places=6)
         self.assertEqual(self.dialog.stacked_widget.currentIndex(), 2)
 
-        self.dialog.add_block(self._constant_block(-10.0, 100))
+        self.dialog.add_block(self._constant_block(130.0, 100))
         self.assertAlmostEqual(self.dialog.offset_db, 120.0, places=6)
 
 

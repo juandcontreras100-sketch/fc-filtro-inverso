@@ -89,6 +89,7 @@ class SessionRecorderTests(unittest.TestCase):
         self.assertEqual(metadata["device"], [1, 7])
         self.assertEqual(metadata["epsilon_base"], self.engine.epsilon_base)
         self.assertEqual(metadata["max_gain_db"], self.engine.max_gain_db)
+        self.assertEqual(metadata["db_full_scale_db"], 140.0)
         self.assertEqual(metadata["calibration_file"], calibration.name)
         self.assertEqual(metadata["mode"], "ecualizado")
 

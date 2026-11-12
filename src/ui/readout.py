@@ -242,7 +242,7 @@ class CursorReadout:
         curve.label.setPos(label_x, label_y)
 
         unit = self._units.get(curve.data_key) or self._units.get(curve.name, "dB")
-        curve.label.setText(f"{y:+.1f} {unit}")
+        curve.label.setText(f"{y:.1f} {unit}")
         curve.label.setVisible(True)
 
     def _describe(self, frequency: float) -> str | None:
@@ -258,5 +258,5 @@ class CursorReadout:
                 continue
             unit = self._units.get(name, "dB")
             label = self._names.get(name, name)
-            parts.append(f"{label} {level:+.1f} {unit}")
+            parts.append(f"{label} {level:.1f} {unit}")
         return "  |  ".join(parts)

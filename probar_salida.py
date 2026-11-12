@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         "--amplitude",
         type=float,
         default=0.1,
-        help="amplitud lineal; 0.1 equivale a -20 dBFS",
+        help="amplitud lineal; 0.1 equivale a 120 dB",
     )
     parser.add_argument("--sample-rate", type=int, default=48_000)
     parser.add_argument(

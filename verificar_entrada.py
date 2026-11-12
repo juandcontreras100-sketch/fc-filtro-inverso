@@ -16,9 +16,17 @@ from pathlib import Path
 
 import numpy as np
 
+from src.config import DB_FULL_SCALE_DB
 
-def _dbfs(value: float) -> float:
-    return 20.0 * np.log10(max(float(value), 1e-12))
+DEFAULT_THRESHOLD_DB = DB_FULL_SCALE_DB - 60.0
+PLOT_FLOOR_DB = 20.0
+PLOT_CEILING_DB = DB_FULL_SCALE_DB
+
+
+def _db(value: float) -> float:
+    """Nivel en dB no negativo (amplitud 1.0 = ``DB_FULL_SCALE_DB``)."""
+    level = DB_FULL_SCALE_DB + 20.0 * np.log10(max(float(value), 1e-12))
+    return max(float(level), 0.0)
 
 
 def _tone_metrics(
@@ -52,7 +60,7 @@ def _tone_metrics(
         / window_sum
     )
     tone_rms = abs(projection) / np.sqrt(2.0)
-    tone_dbfs = max(-240.0, _dbfs(tone_rms))
+    tone_db = _db(tone_rms)
 
     noise_band = (
         (frequencies >= 100.0)
@@ -60,17 +68,17 @@ def _tone_metrics(
         & ~band
     )
     noise_floor_db = (
-        20.0 * np.log10(max(float(np.median(spectrum[noise_band])), 1e-12))
+        _db(float(np.median(spectrum[noise_band])))
         if np.any(noise_band)
-        else -240.0
+        else 0.0
     )
-    tone_peak_db = 20.0 * np.log10(max(float(spectrum[peak_index]), 1e-12))
+    tone_peak_db = _db(float(spectrum[peak_index]))
     dominant_frequency = float(frequencies[int(np.argmax(spectrum))])
 
     return {
         "tone_frequency_hz": float(tone_frequency),
         "tone_peak_frequency_hz": peak_frequency,
-        "tone_dbfs": float(tone_dbfs),
+        "tone_db": float(tone_db),
         "tone_peak_db": float(tone_peak_db),
         "noise_floor_db": float(noise_floor_db),
         "tone_snr_db": float(tone_peak_db - noise_floor_db),
@@ -82,7 +90,7 @@ def analyze_capture(
     samples: np.ndarray,
     *,
     sample_rate: int,
-    threshold_dbfs: float = -60.0,
+    threshold_db: float = DEFAULT_THRESHOLD_DB,
     require_continuous: bool = False,
     tone_frequency: float | None = None,
     tone_tolerance: float = 50.0,
@@ -98,25 +106,25 @@ def analyze_capture(
         raise ValueError("muestras debe ser un vector 1-D no vacío")
     if not np.all(np.isfinite(data)):
         raise ValueError("muestras debe contener solo valores finitos")
-    if sample_rate <= 0 or not np.isfinite(threshold_dbfs):
-        raise ValueError("sample_rate y threshold_dbfs deben ser válidos")
+    if sample_rate <= 0 or not np.isfinite(threshold_db):
+        raise ValueError("sample_rate y threshold_db deben ser válidos")
     if tone_frequency is not None:
         if not np.isfinite(tone_frequency) or not 0 < tone_frequency < sample_rate / 2:
             raise ValueError("tone_frequency debe estar entre 0 y Nyquist")
         if not np.isfinite(tone_tolerance) or tone_tolerance <= 0:
             raise ValueError("tone_tolerance debe ser positiva")
 
-    rms_dbfs = max(-240.0, _dbfs(np.sqrt(np.mean(data * data))))
+    rms_db = _db(np.sqrt(np.mean(data * data)))
     peak = float(np.max(np.abs(data)))
     clipped_samples = int(np.count_nonzero(np.abs(data) >= 0.999))
     frame_size = max(1, sample_rate // 10)
     frame_levels = [
-        max(-240.0, _dbfs(np.sqrt(np.mean(frame * frame))))
+        _db(np.sqrt(np.mean(frame * frame)))
         for frame in (data[start : start + frame_size] for start in range(0, data.size, frame_size))
     ]
-    max_frame_rms_dbfs = max(frame_levels) if frame_levels else -240.0
+    max_frame_rms_db = max(frame_levels) if frame_levels else 0.0
     frames_above_threshold = sum(
-        1 for level in frame_levels if level > threshold_dbfs
+        1 for level in frame_levels if level > threshold_db
     )
     signal_fraction = (
         frames_above_threshold / len(frame_levels) if frame_levels else 0.0
@@ -133,46 +141,46 @@ def analyze_capture(
     )
 
     if tone_metrics is not None:
-        criterion_dbfs = tone_metrics["tone_dbfs"]
+        criterion_db = tone_metrics["tone_db"]
         criterion_name = f"tono {tone_frequency:.0f} Hz"
     elif require_continuous:
-        criterion_dbfs = rms_dbfs
+        criterion_db = rms_db
         criterion_name = "RMS global"
     else:
-        criterion_dbfs = max_frame_rms_dbfs
+        criterion_db = max_frame_rms_db
         criterion_name = "máximo por bloque"
 
     if clipped_samples:
         status = "FAIL"
         message = "Se detectó saturación; reduce la ganancia de entrada."
-    elif tone_metrics is not None and criterion_dbfs <= threshold_dbfs:
+    elif tone_metrics is not None and criterion_db <= threshold_db:
         status = "FAIL"
         message = (
             f"No se detectó el tono de {tone_frequency:.0f} Hz: "
-            f"componente a {criterion_dbfs:.2f} dBFS "
-            f"(se requiere > {threshold_dbfs:.1f} dBFS; "
+            f"componente a {criterion_db:.2f} dB "
+            f"(se requiere > {threshold_db:.1f} dB; "
             f"dominante {tone_metrics['dominant_frequency_hz']:.1f} Hz)."
         )
-    elif criterion_dbfs <= threshold_dbfs:
+    elif criterion_db <= threshold_db:
         status = "FAIL"
         message = (
-            f"Señal demasiado baja ({criterion_name} {criterion_dbfs:.2f} dBFS; "
-            f"se requiere > {threshold_dbfs:.1f} dBFS). "
-            f"RMS global {rms_dbfs:.2f} dBFS, máximo por bloque "
-            f"{max_frame_rms_dbfs:.2f} dBFS."
+            f"Señal demasiado baja ({criterion_name} {criterion_db:.2f} dB; "
+            f"se requiere > {threshold_db:.1f} dB). "
+            f"RMS global {rms_db:.2f} dB, máximo por bloque "
+            f"{max_frame_rms_db:.2f} dB."
         )
     elif tone_metrics is not None:
         status = "PASS"
         message = (
             f"Tono de {tone_frequency:.0f} Hz detectado a "
-            f"{criterion_dbfs:.2f} dBFS (umbral > {threshold_dbfs:.1f} dBFS; "
+            f"{criterion_db:.2f} dB (umbral > {threshold_db:.1f} dB; "
             f"dominante {tone_metrics['dominant_frequency_hz']:.1f} Hz)."
         )
     else:
         status = "PASS"
         message = (
             f"La entrada capturó señal por encima del umbral "
-            f"({criterion_name} {criterion_dbfs:.2f} dBFS; "
+            f"({criterion_name} {criterion_db:.2f} dB; "
             f"{frames_above_threshold}/{len(frame_levels)} bloques)."
         )
 
@@ -182,8 +190,8 @@ def analyze_capture(
         "sample_rate": int(sample_rate),
         "frames": int(data.size),
         "duration_seconds": float(data.size / sample_rate),
-        "rms_dbfs": float(rms_dbfs),
-        "max_frame_rms_dbfs": float(max_frame_rms_dbfs),
+        "rms_db": float(rms_db),
+        "max_frame_rms_db": float(max_frame_rms_db),
         "frames_above_threshold": int(frames_above_threshold),
         "signal_fraction": float(signal_fraction),
         "criterion": (
@@ -193,23 +201,23 @@ def analyze_capture(
         ),
         "require_continuous": bool(require_continuous),
         "tone_detected": bool(
-            tone_metrics is not None and criterion_dbfs > threshold_dbfs
+            tone_metrics is not None and criterion_db > threshold_db
         ),
         "peak": peak,
-        "peak_dbfs": float(max(-240.0, _dbfs(peak))),
+        "peak_db": float(_db(peak)),
         "clipped_samples": clipped_samples,
-        "threshold_dbfs": float(threshold_dbfs),
-        "frame_rms_dbfs_100ms": frame_levels,
+        "threshold_db": float(threshold_db),
+        "frame_rms_db_100ms": frame_levels,
         **({} if tone_metrics is None else tone_metrics),
     }
 
 
 def _write_svg(report: dict[str, object], path: Path) -> None:
-    levels = report["frame_rms_dbfs_100ms"]
+    levels = report["frame_rms_db_100ms"]
     assert isinstance(levels, list)
     width, height = 900, 360
     left, top, plot_width, plot_height = 70, 30, 790, 270
-    floor_db, ceiling_db = -120.0, 0.0
+    floor_db, ceiling_db = PLOT_FLOOR_DB, PLOT_CEILING_DB
     points = []
     for index, level in enumerate(levels):
         x = left + (plot_width * index / max(1, len(levels) - 1))
@@ -217,17 +225,17 @@ def _write_svg(report: dict[str, object], path: Path) -> None:
             ceiling_db - floor_db
         )
         points.append(f"{x:.1f},{y:.1f}")
-    threshold = float(report["threshold_dbfs"])
+    threshold = float(report["threshold_db"])
     threshold_y = top + plot_height * (ceiling_db - threshold) / (ceiling_db - floor_db)
     svg = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
         '<rect width="100%" height="100%" fill="white"/>',
         '<text x="70" y="20" font-family="sans-serif" font-size="16">Nivel RMS por bloques de 100 ms</text>',
     ]
-    for db in range(-120, 1, 20):
+    for db in range(int(floor_db), int(ceiling_db) + 1, 20):
         y = top + plot_height * (ceiling_db - db) / (ceiling_db - floor_db)
         svg.append(f'<path d="M {left} {y:.1f} H {left + plot_width}" stroke="#ddd"/>')
-        svg.append(f'<text x="12" y="{y + 4:.1f}" font-family="sans-serif" font-size="12">{db} dBFS</text>')
+        svg.append(f'<text x="12" y="{y + 4:.1f}" font-family="sans-serif" font-size="12">{db} dB</text>')
     svg.extend(
         [
             f'<path d="M {left} {threshold_y:.1f} H {left + plot_width}" stroke="#c33" stroke-dasharray="6 4"/>',
@@ -291,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--device", help="índice o parte del nombre de la entrada")
     parser.add_argument("--sample-rate", type=int, default=48_000)
     parser.add_argument("--duration", type=float, default=8.0)
-    parser.add_argument("--threshold-dbfs", type=float, default=-60.0)
+    parser.add_argument("--threshold-db", type=float, default=DEFAULT_THRESHOLD_DB)
     parser.add_argument(
         "--require-continuous",
         action="store_true",
@@ -369,7 +377,7 @@ def main(argv: list[str] | None = None) -> int:
     report = analyze_capture(
         captured[:, 0],
         sample_rate=args.sample_rate,
-        threshold_dbfs=args.threshold_dbfs,
+        threshold_db=args.threshold_db,
         require_continuous=args.require_continuous,
         tone_frequency=args.tone,
         tone_tolerance=args.tone_tolerance,
@@ -386,14 +394,14 @@ def main(argv: list[str] | None = None) -> int:
     _write_svg(report, args.plot)
     print(f"{report['status']}: {report['message']}")
     print(
-        f"RMS={report['rms_dbfs']:.2f} dBFS, "
-        f"máximo por bloque={report['max_frame_rms_dbfs']:.2f} dBFS, "
-        f"pico={report['peak_dbfs']:.2f} dBFS"
+        f"RMS={report['rms_db']:.2f} dB, "
+        f"máximo por bloque={report['max_frame_rms_db']:.2f} dB, "
+        f"pico={report['peak_db']:.2f} dB"
     )
     if args.tone is not None:
         print(
             f"Tono {report['tone_frequency_hz']:.0f} Hz: "
-            f"{report['tone_dbfs']:.2f} dBFS | "
+            f"{report['tone_db']:.2f} dB | "
             f"dominante {report['dominant_frequency_hz']:.1f} Hz | "
             f"SNR espectral {report['tone_snr_db']:.1f} dB"
         )

@@ -6,15 +6,19 @@ import numpy as np
 
 from src.config import (
     CLIP_THRESHOLD_LINEAR,
-    DBFS_CEILING_DB,
-    DBFS_FLOOR_DB,
+    DB_CEILING_DB,
+    DB_FLOOR_DB,
+    DB_FULL_SCALE_DB,
     DEFAULT_SAMPLE_RATE_HZ,
 )
 
-DB_FLOOR = DBFS_FLOOR_DB
-DB_CEILING = DBFS_CEILING_DB
+DB_FLOOR = DB_FLOOR_DB
+DB_CEILING = DB_CEILING_DB
+DB_FULL_SCALE = DB_FULL_SCALE_DB
 CLIP_THRESHOLD = CLIP_THRESHOLD_LINEAR
-CLIP_DB = 20.0 * np.log10(CLIP_THRESHOLD)
+
+# Las ponderaciones A/C son correcciones relativas con signo (no niveles).
+_WEIGHTING_FLOOR_DB = -140.0
 
 # Centros nominales ISO 266 de 25 Hz a 20 kHz.
 _THIRD_OCTAVE_CENTERS_HZ = np.array(
@@ -27,12 +31,26 @@ _THIRD_OCTAVE_CENTERS_HZ = np.array(
 )
 
 
-def dbfs_to_spl(
+def _to_db(value: float, db_floor: float) -> float:
+    linear_floor = 10.0 ** ((db_floor - DB_FULL_SCALE) / 20.0)
+    return max(20.0 * np.log10(max(value, linear_floor)) + DB_FULL_SCALE, db_floor)
+
+
+CLIP_DB = _to_db(CLIP_THRESHOLD, DB_FLOOR)
+
+
+def db_to_spl(
     values_db: float | np.ndarray,
     offset_db: float,
 ) -> float | np.ndarray:
-    """Convierte niveles dBFS a dB SPL con el offset de calibracion."""
-    values_spl = np.asarray(values_db, dtype=np.float64) + float(offset_db)
+    """Convierte niveles dB a dB SPL.
+
+    ``offset_db`` es el nivel SPL de la plena escala digital, que corresponde
+    a ``DB_FULL_SCALE`` dB en la escala de visualizacion.
+    """
+    values_spl = (
+        np.asarray(values_db, dtype=np.float64) - DB_FULL_SCALE + float(offset_db)
+    )
     return float(values_spl) if values_spl.ndim == 0 else values_spl
 
 
@@ -58,7 +76,7 @@ def a_weighting_db(frequencies_hz: float | np.ndarray) -> float | np.ndarray:
     )
     with np.errstate(divide="ignore", invalid="ignore"):
         values_db = 20.0 * np.log10(response) - 20.0 * np.log10(reference_response)
-    values_db = np.maximum(values_db, DB_FLOOR)
+    values_db = np.maximum(values_db, _WEIGHTING_FLOOR_DB)
     return float(values_db) if values_db.ndim == 0 else values_db
 
 
@@ -82,7 +100,7 @@ def c_weighting_db(frequencies_hz: float | np.ndarray) -> float | np.ndarray:
         np.maximum(response(frequency_2), np.finfo(np.float64).tiny)
         / reference_response
     )
-    values_db = np.maximum(values_db, DB_FLOOR)
+    values_db = np.maximum(values_db, _WEIGHTING_FLOOR_DB)
     return float(values_db) if values_db.ndim == 0 else values_db
 
 
@@ -104,7 +122,7 @@ def total_level_db(
     weighting: str = "Z",
     sample_rate: float = DEFAULT_SAMPLE_RATE_HZ,
 ) -> float:
-    """Nivel RMS total en dBFS por Parseval, con ponderacion Z, A o C.
+    """Nivel RMS total en dB por Parseval, con ponderacion Z, A o C.
 
     ``sample_rate`` solo interviene al calcular la ponderacion A/C; se usa
     48 kHz por defecto y la interfaz pasa la frecuencia real del stream.
@@ -147,10 +165,11 @@ def spectrum_db(
     fft_size: int,
     db_floor: float = DB_FLOOR,
 ) -> np.ndarray:
-    """Magnitud de pico dBFS en RFFT, corregida por ganancia coherente Hann.
+    """Magnitud de pico en dB en RFFT, corregida por ganancia coherente Hann.
 
-    0 dBFS corresponde a amplitud de pico 1.0; un seno de amplitud pico 1.0
-    tiene RMS de tiempo -3.0103 dBFS. El ENBW para ruido esta disponible en
+    La amplitud de pico 1.0 corresponde a ``DB_FULL_SCALE`` (140 dB); un seno
+    de amplitud pico 1.0 tiene RMS de tiempo ``DB_FULL_SCALE - 3.0103`` dB.
+    El ENBW para ruido esta disponible en
     :func:`equivalent_noise_bandwidth_hz`.
 
     ``rfft`` devuelve solo la mitad no negativa del espectro: cada bin interior
@@ -175,7 +194,9 @@ def spectrum_db(
     # El ultimo bin es Nyquist solo cuando fft_size es par.
     interior_end = -1 if fft_size % 2 == 0 else magnitude.size
     magnitude[1:interior_end] *= 2.0
-    return np.maximum(20.0 * np.log10(np.maximum(magnitude, 1e-12)), db_floor)
+    return np.maximum(
+        20.0 * np.log10(np.maximum(magnitude, 1e-12)) + DB_FULL_SCALE, db_floor
+    )
 
 
 def level_db(
@@ -197,16 +218,14 @@ def level_db(
     return _to_db(rms, db_floor), _to_db(peak, db_floor)
 
 
-def _to_db(value: float, db_floor: float) -> float:
-    linear_floor = 10.0 ** (db_floor / 20.0)
-    return max(20.0 * np.log10(max(value, linear_floor)), db_floor)
-
-
 def gain_db(transfer: np.ndarray, db_floor: float = DB_FLOOR) -> np.ndarray:
-    """Magnitud de una respuesta compleja expresada en dB."""
+    """Magnitud de una respuesta compleja en dB; la ganancia unitaria vale ``DB_FULL_SCALE``."""
     magnitude = np.abs(np.asarray(transfer))
-    linear_floor = 10.0 ** (db_floor / 20.0)
-    return np.maximum(20.0 * np.log10(np.maximum(magnitude, linear_floor)), db_floor)
+    linear_floor = 10.0 ** ((db_floor - DB_FULL_SCALE) / 20.0)
+    return np.maximum(
+        20.0 * np.log10(np.maximum(magnitude, linear_floor)) + DB_FULL_SCALE,
+        db_floor,
+    )
 
 
 def third_octave_bands(

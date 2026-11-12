@@ -22,6 +22,7 @@ from typing import Any, Callable, Mapping
 
 import numpy as np
 
+from src.config import DB_FULL_SCALE_DB
 from src.storage.profiles import UserProfile
 
 # Encabezado exacto del registro de niveles.
@@ -228,6 +229,7 @@ class SessionRecorder:
             "device": _json_device(self.engine.device),
             "epsilon_base": float(self.engine.epsilon_base),
             "max_gain_db": float(self.engine.max_gain_db),
+            "db_full_scale_db": DB_FULL_SCALE_DB,
             "calibration_file": (
                 None if calibration is None else Path(calibration).name
             ),

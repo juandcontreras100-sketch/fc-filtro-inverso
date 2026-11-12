@@ -17,7 +17,13 @@ from pathlib import Path
 
 import numpy as np
 
-from src.config import DEFAULT_FFT_SIZE_SAMPLES, DEFAULT_SAMPLE_RATE_HZ
+from src.config import (
+    DB_FULL_SCALE_DB,
+    DEFAULT_FFT_SIZE_SAMPLES,
+    DEFAULT_SAMPLE_RATE_HZ,
+)
+
+MIN_RMS_DB = DB_FULL_SCALE_DB - 60.0
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Calibración H(f) por Log Sine Sweep")
@@ -291,13 +297,13 @@ def validate_calibration_quality(
             )
 
         rms = float(np.sqrt(np.mean(samples * samples)))
-        rms_dbfs = 20.0 * np.log10(max(rms, 1e-12))
-        if rms_dbfs <= -60.0:
+        rms_db = max(DB_FULL_SCALE_DB + 20.0 * np.log10(max(rms, 1e-12)), 0.0)
+        if rms_db <= MIN_RMS_DB:
             raise ValueError(
                 f"señal de entrada demasiado baja en la grabación {index} "
-                f"({rms_dbfs:.2f} dBFS); no se guardó calibración"
+                f"({rms_db:.2f} dB); no se guardó calibración"
             )
-        rms_levels.append(rms_dbfs)
+        rms_levels.append(rms_db)
 
     frequencies = np.fft.rfftfreq(fft_size, d=1.0 / sample_rate)
     band = (frequencies >= 100.0) & (frequencies <= 10_000.0)
@@ -311,7 +317,7 @@ def validate_calibration_quality(
         )
 
     return {
-        "minimum_rms_dbfs": float(min(rms_levels)),
+        "minimum_rms_db": float(min(rms_levels)),
         "median_coherence_100_10000_hz": median_coherence,
     }
 
@@ -416,7 +422,7 @@ def main() -> int:
     print(f"Coherencia guardada en: {coherence_path.resolve()}")
     print(
         "Calidad: "
-        f"RMS mínimo {quality['minimum_rms_dbfs']:.2f} dBFS, "
+        f"RMS mínimo {quality['minimum_rms_db']:.2f} dB, "
         "coherencia mediana "
         f"{quality['median_coherence_100_10000_hz']:.3f}."
     )

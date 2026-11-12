@@ -21,7 +21,7 @@ rosa con un tono de 1 kHz.
 
 **Criterios de aceptación:**
 - [ ] `py probar_loopback.py` informa `PASS`.
-- [ ] Tono de 1 kHz y RMS superan −60 dBFS sin saturación.
+- [ ] Tono de 1 kHz y RMS superan 80 dB sin saturación.
 
 **Verificación:** reporte de la prueba con dispositivo y niveles anotados.
 
@@ -34,7 +34,7 @@ común entre la salida identificada del amplificador y el canal izquierdo rosa.
 
 **Criterios de aceptación:**
 - [ ] Sin DC peligroso en la entrada de audio.
-- [ ] `py verificar_entrada.py --duration 8` detecta señal > −60 dBFS.
+- [ ] `py verificar_entrada.py --duration 8` detecta señal > 80 dB.
 - [ ] No hay clipping y el circuito no se calienta anormalmente.
 
 **Verificación:** reporte JSON/SVG de entrada y revisión visual del montaje.
@@ -65,7 +65,7 @@ medir el circuito, sin sobrescribir los datos sintéticos hasta aprobar calidad.
 
 **Criterios de aceptación:**
 - [ ] `py calibrar_demo.py --amplitude 0.1` (o nivel seguro) termina correctamente.
-- [ ] RMS > −60 dBFS, sin saturación y coherencia mediana > 0.8 entre 100 Hz y 10 kHz.
+- [ ] RMS > 80 dB, sin saturación y coherencia mediana > 0.8 entre 100 Hz y 10 kHz.
 - [ ] `medicion_H.npy` y `medicion_gamma2.npy` se marcan como medición real con fecha/configuración.
 
 **Verificación:** salida del calibrador y análisis de los archivos generados.

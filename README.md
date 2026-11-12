@@ -57,8 +57,8 @@ Captura reproducible con señales sintéticas y sin hardware:
   comparación entrada/salida. Sin calibración válida aparece «Sin calibración
   cargada» en vez de curvas de respuesta ficticias. Los ejes de frecuencia de
   los espectros usan kHz; pase el ratón para leer Hz y niveles.
-- **Cascada**: historial lineal en kHz del espectro de salida en dBFS; el
-  tiempo avanza hacia abajo y la escala de color se fija entre −140 y +6 dBFS.
+- **Cascada**: historial lineal en kHz del espectro de salida en dB; el
+  tiempo avanza hacia abajo y la escala de color se fija entre 0 y 146 dB.
 
 Cambiar la interfaz, el muestreo o el tamaño de FFT reinicia el stream de audio.
 La calibración se descarta si deja de ser compatible con el nuevo tamaño de FFT
@@ -128,9 +128,11 @@ no se debe interpretar una demo como una medición física.
 
 ## Calibración dB SPL
 
-La escala de entrada se convierte mediante **dB SPL = dBFS + offset**. El offset
-depende de la cadena de captura; sin un offset válido, la interfaz indica
-`SIN CALIBRAR` y todos los valores de entrada permanecen en dBFS.
+La escala de entrada se convierte mediante **dB SPL = dB − 140 + offset**, donde el
+offset es el nivel SPL que corresponde a la plena escala digital (140 dB en la
+escala de la aplicación). El offset depende de la cadena de captura; sin un
+offset válido, la interfaz indica `SIN CALIBRAR` y todos los valores de entrada
+permanecen en dB.
 
 ### Asistente de calibración
 
@@ -143,11 +145,11 @@ tres pasos:
    lectura como referencia SPL; el valor de referencia es ajustable.
 2. **Medición:** mantenga estable la referencia y capture **1 s** de entrada. La
    medición solo es válida si cumple simultáneamente:
-   - RMS > -70 dBFS.
-   - Pico < -1 dBFS.
+   - RMS > 70 dB.
+   - Pico < 139 dB.
    - Variación de RMS < 1 dB.
 3. **Resultado:** compruebe y aplique el offset calculado como
-   `offset_db = referencia SPL - RMS dBFS`.
+   `offset_db = referencia SPL - RMS dB + 140`.
 
 Al aplicar una medición válida se guarda `calibracion_spl.json` en la raíz del
 proyecto. Contiene `offset_db`, `date` (fecha ISO en UTC) y `device_name`, y está
@@ -174,7 +176,7 @@ comprobarlo.
 Z/A/C se aplica al **nivel total**. La curva FFT de entrada solo recibe el offset
 cuando se muestra en dB SPL; no se le aplica la ponderación. La salida, el
 espectrograma, los medidores de pico/RMS y la indicación `CLIP` permanecen
-siempre en dBFS.
+siempre en dB.
 
 Con ponderación A, el nivel total usa estas zonas de color: **verde** por debajo
 de 70 dB SPL, **amarillo** entre 70 y 85 dB SPL, ambos incluidos, y **rojo** por
@@ -193,9 +195,13 @@ la que se midió.
 
 ## Convenciones DSP y latencia
 
-Los niveles espectrales usan dBFS de pico (amplitud lineal 1 equivale a 0 dBFS),
-con un piso de visualización de −140 dBFS. El nivel RMS total de un seno a escala
-completa es aproximadamente −3,01 dBFS. La convolución WOLA es causal y añade
+Todos los niveles se expresan en una escala de dB **sin valores negativos**: 0 dB
+es el piso de visualización y la plena escala digital (amplitud lineal 1) vale
+140 dB (`DB_FULL_SCALE_DB` en `src/config.py`); el rango mostrado es 0–146 dB. El
+nivel RMS total de un seno a escala completa es aproximadamente 136,99 dB, y la
+ganancia unitaria de un filtro se muestra en 140 dB. Las ponderaciones A/C son
+correcciones relativas con signo y no se muestran como niveles. La convolución
+WOLA es causal y añade
 un hop de latencia algorítmica (por ejemplo, 21,3 ms con FFT 2048 a 48 kHz);
 esto no incluye los buffers de entrada/salida del dispositivo, que dependen del
 hardware y no se verifican en las pruebas sintéticas.
@@ -243,13 +249,13 @@ src/config.py                 Constantes DSP, formato, frecuencia y visualizaci�
 src/dsp/inverse_filter.py     Filtro inverso Wiener/Tikhonov y procesador WOLA.
 src/dsp/numerics.py           Métodos numéricos y métricas académicas.
 analisis_numerico.py          Comparación analítica/gradiente y linealidad.
-src/dsp/spectrum.py           Espectro, niveles, ponderación Z/A y conversión dBFS/dB SPL.
+src/dsp/spectrum.py           Espectro, niveles, ponderación Z/A y conversión dB/dB SPL.
 src/ui/calibration.py         Asistente QDialog de calibración SPL en tres pasos.
 src/ui/window.py              Ventana principal e integración de la calibración SPL.
 src/ui/controls.py            Panel de control y acciones SPL.
 src/ui/meters.py              Medidores de nivel e indicador de saturación.
 src/ui/spectrogram.py         Cascada temporal.
-src/ui/readout.py             Lectura de valores bajo el cursor en dBFS/dB SPL.
+src/ui/readout.py             Lectura de valores bajo el cursor en dB/dB SPL.
 src/ui/spl_context.py         Contexto físico y zonas de color para niveles SPL.
 src/ui/spl_persistence.py     Persistencia JSON y detección de la entrada calibrada.
 src/ui/theme.py               Paleta de la interfaz.

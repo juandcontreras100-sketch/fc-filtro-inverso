@@ -7,6 +7,7 @@ from typing import Any
 from PySide6 import QtCore, QtWidgets
 
 from src.config import (
+    DB_FULL_SCALE_DB,
     DEFAULT_EPSILON_RATIO,
     DEFAULT_MAX_GAIN_DB,
     MAX_CONFIGURABLE_GAIN_DB,
@@ -159,13 +160,15 @@ class ControlPanel(QtWidgets.QWidget):
         self.spl_calibration_button.clicked.connect(self.splCalibrationRequested.emit)
         form.addRow(self.spl_calibration_button)
 
-        self.spl_status_label = QtWidgets.QLabel("SIN CALIBRAR: valores en dBFS")
+        self.spl_status_label = QtWidgets.QLabel("SIN CALIBRAR: valores en dB")
         self.spl_status_label.setWordWrap(True)
         self.spl_status_label.setStyleSheet(f"color: {theme.WARNING};")
         form.addRow(self.spl_status_label)
 
         self.spl_checkbox = QtWidgets.QCheckBox("Mostrar entrada en dB SPL")
-        self.spl_checkbox.setToolTip("La relacion es: dB SPL = dBFS + offset")
+        self.spl_checkbox.setToolTip(
+            f"La relacion es: dB SPL = dB - {DB_FULL_SCALE_DB:g} + offset"
+        )
         self.spl_checkbox.toggled.connect(self._on_spl_display_toggled)
         form.addRow(self.spl_checkbox)
 

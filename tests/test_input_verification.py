@@ -16,14 +16,14 @@ class InputVerificationTests(unittest.TestCase):
         report = analyze_capture(samples, sample_rate=sample_rate)
 
         self.assertEqual(report["status"], "PASS")
-        self.assertGreater(report["rms_dbfs"], -60.0)
+        self.assertGreater(report["rms_db"], 80.0)
         self.assertEqual(report["sample_rate"], sample_rate)
 
     def test_rejects_silence_as_unverified_input(self):
         report = analyze_capture(np.zeros(4_800), sample_rate=48_000)
 
         self.assertEqual(report["status"], "FAIL")
-        self.assertEqual(report["rms_dbfs"], -240.0)
+        self.assertEqual(report["rms_db"], 0.0)
         self.assertIn("demasiado baja", report["message"])
 
     def test_detects_intermittent_speech_using_max_frame_level(self):
@@ -36,8 +36,8 @@ class InputVerificationTests(unittest.TestCase):
         report = analyze_capture(samples, sample_rate=sample_rate)
 
         self.assertEqual(report["status"], "PASS")
-        self.assertLess(report["rms_dbfs"], -60.0)
-        self.assertGreater(report["max_frame_rms_dbfs"], -60.0)
+        self.assertLess(report["rms_db"], 80.0)
+        self.assertGreater(report["max_frame_rms_db"], 80.0)
         self.assertGreater(report["frames_above_threshold"], 0)
         self.assertLess(report["signal_fraction"], 0.5)
 
@@ -82,7 +82,7 @@ class InputVerificationTests(unittest.TestCase):
         )
 
         self.assertEqual(report["status"], "PASS")
-        self.assertAlmostEqual(report["tone_dbfs"], -36.99, delta=0.5)
+        self.assertAlmostEqual(report["tone_db"], 103.01, delta=0.5)
         self.assertAlmostEqual(report["dominant_frequency_hz"], 1_000.0, delta=2.0)
 
     def test_rejects_noise_without_the_expected_tone(self):
@@ -95,7 +95,7 @@ class InputVerificationTests(unittest.TestCase):
         )
 
         self.assertEqual(report["status"], "FAIL")
-        self.assertLess(report["tone_dbfs"], -60.0)
+        self.assertLess(report["tone_db"], 80.0)
 
     def test_rejects_a_tone_at_a_different_frequency(self):
         sample_rate = 48_000
@@ -107,7 +107,7 @@ class InputVerificationTests(unittest.TestCase):
         )
 
         self.assertEqual(report["status"], "FAIL")
-        self.assertLess(report["tone_dbfs"], -60.0)
+        self.assertLess(report["tone_db"], 80.0)
         self.assertAlmostEqual(report["dominant_frequency_hz"], 6_000.0, delta=2.0)
 
     def test_writes_an_svg_level_plot(self):

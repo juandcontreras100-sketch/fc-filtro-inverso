@@ -34,7 +34,7 @@ class CalibrationTests(unittest.TestCase):
             recordings, coherence, sample_rate, fft_size
         )
 
-        self.assertGreater(quality["minimum_rms_dbfs"], -60.0)
+        self.assertGreater(quality["minimum_rms_db"], 80.0)
         self.assertGreater(quality["median_coherence_100_10000_hz"], 0.8)
 
     def test_calibration_quality_rejects_silence(self):

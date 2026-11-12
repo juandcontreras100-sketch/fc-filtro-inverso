@@ -10,8 +10,9 @@ from src.audio.engine import AudioEngine, SpectrumFrame
 from src.dsp.spectrum import (
     DB_CEILING,
     DB_FLOOR,
+    DB_FULL_SCALE,
     a_weighting_db,
-    dbfs_to_spl,
+    db_to_spl,
     level_db,
     total_level_db,
 )
@@ -26,27 +27,28 @@ class SplSpectrumTests(unittest.TestCase):
             2.0 * np.pi * 1_000.0 * np.arange(4_800) / sample_rate
         )
 
-        total_dbfs = total_level_db(samples)
-        total_spl = dbfs_to_spl(total_dbfs, 94.0)
+        total_db = total_level_db(samples)
+        total_spl = db_to_spl(total_db, 94.0)
 
+        self.assertAlmostEqual(total_db, DB_FULL_SCALE - 3.0103, delta=0.001)
         self.assertAlmostEqual(total_spl, 90.99, delta=0.1)
 
-    def test_reference_94_and_measured_minus_26_give_offset_120(self):
-        measured_dbfs = -26.0
+    def test_reference_94_and_measured_114_give_offset_120(self):
+        measured_db = 114.0
         reference_spl = 94.0
 
-        offset_db = reference_spl - measured_dbfs
+        offset_db = reference_spl - measured_db + DB_FULL_SCALE
 
         self.assertAlmostEqual(offset_db, 120.0, places=6)
-        self.assertAlmostEqual(dbfs_to_spl(measured_dbfs, offset_db), 94.0, places=6)
+        self.assertAlmostEqual(db_to_spl(measured_db, offset_db), 94.0, places=6)
 
-    def test_dbfs_to_spl_converts_arrays_without_mutating_them(self):
-        values_db = np.array([-30.0, -20.0, -10.0])
+    def test_db_to_spl_converts_arrays_without_mutating_them(self):
+        values_db = np.array([110.0, 120.0, 130.0])
 
-        values_spl = dbfs_to_spl(values_db, 94.0)
+        values_spl = db_to_spl(values_db, 94.0)
 
         np.testing.assert_allclose(values_spl, [64.0, 74.0, 84.0])
-        np.testing.assert_allclose(values_db, [-30.0, -20.0, -10.0])
+        np.testing.assert_allclose(values_db, [110.0, 120.0, 130.0])
 
     def test_a_weighting_matches_iec_anchor_values(self):
         frequencies = np.array([1_000.0, 100.0, 10_000.0])
@@ -174,28 +176,32 @@ class SplMainWindowTests(unittest.TestCase):
 
         y_min, y_max = self.window.input_plot.viewRange()[1]
         self.assertAlmostEqual(y_min, 0.0, places=6)
-        self.assertAlmostEqual(y_max, DB_CEILING + 94.0, places=6)
+        self.assertAlmostEqual(y_max, DB_CEILING - DB_FULL_SCALE + 94.0, places=6)
         self.assertEqual(self.window.input_plot.getAxis("left").labelUnits, "dB SPL")
 
         output_min, output_max = self.window.output_plot.viewRange()[1]
         self.assertAlmostEqual(output_min, DB_FLOOR, places=6)
         self.assertAlmostEqual(output_max, DB_CEILING, places=6)
-        self.assertEqual(self.window.output_plot.getAxis("left").labelUnits, "dBFS")
+        self.assertEqual(self.window.output_plot.getAxis("left").labelUnits, "dB")
 
         _frequencies, displayed_input = self.window.input_curve.getOriginalDataset()
         np.testing.assert_allclose(
             displayed_input,
-            dbfs_to_spl(self.window._input_db[1:], 94.0),
+            db_to_spl(self.window._input_db[1:], 94.0),
         )
-        self.assertAlmostEqual(float(np.max(self.window._input_db)), 0.0, delta=0.1)
+        self.assertAlmostEqual(
+            float(np.max(self.window._input_db)), DB_FULL_SCALE, delta=0.1
+        )
 
         text = self.window.readout._describe(3_000.0)
         self.assertIn("dB SPL", text)
         self.assertIn("salida", text)
-        self.assertIn("dBFS", text)
+        self.assertIn("entrada (sin calibrar)", text)
 
         input_rms = self.window.meters.input_meter._rms_db
-        self.assertAlmostEqual(input_rms, 20.0 * np.log10(1.0 / np.sqrt(2.0)), places=6)
+        self.assertAlmostEqual(
+            input_rms, DB_FULL_SCALE + 20.0 * np.log10(1.0 / np.sqrt(2.0)), places=6
+        )
 
     def test_total_level_uses_the_selected_a_weighting_and_spl_offset(self):
         self.window.controls.spl_checkbox.setChecked(True)
@@ -204,7 +210,7 @@ class SplMainWindowTests(unittest.TestCase):
         )
         input_samples = self._refresh_with_sine()
 
-        expected = dbfs_to_spl(
+        expected = db_to_spl(
             total_level_db(input_samples, weighting="A", sample_rate=48_000.0),
             94.0,
         )
@@ -215,19 +221,19 @@ class SplMainWindowTests(unittest.TestCase):
             f"{expected:.1f} dB SPL (A)",
         )
 
-    def test_total_and_input_stay_in_dbfs_when_spl_is_not_selected(self):
+    def test_total_and_input_stay_in_db_when_spl_is_not_selected(self):
         input_samples = self._refresh_with_sine()
         expected = total_level_db(input_samples, weighting="Z")
 
         self.assertEqual(
             self.window.controls.total_level_label.text(),
-            f"{expected:.1f} dBFS (Z)",
+            f"{expected:.1f} dB (Z)",
         )
-        self.assertEqual(self.window.input_plot.getAxis("left").labelUnits, "dBFS")
+        self.assertEqual(self.window.input_plot.getAxis("left").labelUnits, "dB")
         _frequencies, displayed_input = self.window.input_curve.getOriginalDataset()
         np.testing.assert_allclose(displayed_input, self.window._input_db[1:])
 
-    def test_disabling_spl_restores_the_dbfs_axis_and_cursor(self):
+    def test_disabling_spl_restores_the_db_axis_and_cursor(self):
         self.window.controls.spl_checkbox.setChecked(True)
         self._refresh_with_sine()
 
@@ -236,7 +242,7 @@ class SplMainWindowTests(unittest.TestCase):
         y_min, y_max = self.window.input_plot.viewRange()[1]
         self.assertAlmostEqual(y_min, DB_FLOOR, places=6)
         self.assertAlmostEqual(y_max, DB_CEILING, places=6)
-        self.assertEqual(self.window.input_plot.getAxis("left").labelUnits, "dBFS")
+        self.assertEqual(self.window.input_plot.getAxis("left").labelUnits, "dB")
         self.assertNotIn("dB SPL", self.window.readout._describe(3_000.0))
 
 

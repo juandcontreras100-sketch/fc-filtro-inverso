@@ -16,6 +16,7 @@ from PySide6 import QtCore, QtWidgets
 
 from src.audio.engine import AudioEngine, SpectrumFrame
 from src.config import FREQUENCY_MAX_HZ
+from src.dsp.spectrum import DB_FULL_SCALE
 from src.storage.profiles import UserProfile
 from src.storage.recorder import SessionRecorder
 from src.ui import theme
@@ -205,17 +206,17 @@ class MainWindowLogPlotsTests(unittest.TestCase):
         self.window._update_filter_curve()
 
         self.assertEqual(self.window._measured_db.size, bins)
-        np.testing.assert_allclose(self.window._measured_db, 0.0, atol=1e-6)
-        # El inverso Wiener/Tikhonov queda apenas por debajo de 0 dB.
-        np.testing.assert_allclose(self.window._inverse_db, 0.0, atol=1.0)
-        np.testing.assert_allclose(self.window._product_db, 0.0, atol=1.0)
+        np.testing.assert_allclose(self.window._measured_db, DB_FULL_SCALE, atol=1e-6)
+        # El inverso Wiener/Tikhonov queda apenas por debajo de la ganancia unitaria.
+        np.testing.assert_allclose(self.window._inverse_db, DB_FULL_SCALE, atol=1.0)
+        np.testing.assert_allclose(self.window._product_db, DB_FULL_SCALE, atol=1.0)
 
-    def test_compare_plot_overlays_input_and_output_in_dbfs(self):
+    def test_compare_plot_overlays_input_and_output_in_db(self):
         combo = self.window.controls.third_plot_combo
         combo.setCurrentIndex(combo.findData("comparacion"))
         bins = self.engine.bin_count
-        self.window._input_db = np.full(bins, -20.0)
-        self.window._output_db = np.full(bins, -35.0)
+        self.window._input_db = np.full(bins, 120.0)
+        self.window._output_db = np.full(bins, 105.0)
 
         self.window._update_input_display()
 
@@ -227,8 +228,8 @@ class MainWindowLogPlotsTests(unittest.TestCase):
         np.testing.assert_allclose(
             frequencies, self.window._frequencies[1:] / 1_000.0
         )
-        np.testing.assert_allclose(input_values, -20.0)
-        np.testing.assert_allclose(output_values, -35.0)
+        np.testing.assert_allclose(input_values, 120.0)
+        np.testing.assert_allclose(output_values, 105.0)
 
     def test_response_plot_shows_calibration_but_not_uncalibrated_placeholders(self):
         bins = self.engine.bin_count
@@ -237,9 +238,13 @@ class MainWindowLogPlotsTests(unittest.TestCase):
         self.engine.recompute_inverse()
 
         self.window._update_filter_curve()
-        np.testing.assert_allclose(self.window._measured_db, 20.0, atol=1e-6)
-        np.testing.assert_allclose(self.window._inverse_db, 0.0, atol=1e-6)
-        np.testing.assert_allclose(self.window._product_db, 20.0, atol=1e-6)
+        np.testing.assert_allclose(
+            self.window._measured_db, DB_FULL_SCALE + 20.0, atol=1e-6
+        )
+        np.testing.assert_allclose(self.window._inverse_db, DB_FULL_SCALE, atol=1e-6)
+        np.testing.assert_allclose(
+            self.window._product_db, DB_FULL_SCALE + 20.0, atol=1e-6
+        )
 
         self.engine.h_response = None
         self.engine.bypass = False
@@ -373,14 +378,14 @@ class CursorReadoutLogTests(unittest.TestCase):
         readout = CursorReadout([_FakePlot()], log_x=True)
         readout.set_spectra(
             np.array([100.0, 1_000.0, 10_000.0]),
-            {"entrada": np.array([-10.0, -20.0, -30.0])},
+            {"entrada": np.array([110.0, 100.0, 90.0])},
         )
 
         text = readout.handle_mouse(QtCore.QPointF(50.0, 50.0))
 
         self.assertIsNotNone(text)
         self.assertIn("1.000 Hz", text)
-        self.assertIn("entrada -20.0 dB", text)
+        self.assertIn("entrada 100.0 dB", text)
 
 
 class CursorReadoutWindowTests(unittest.TestCase):
@@ -418,7 +423,7 @@ class CursorReadoutWindowTests(unittest.TestCase):
         self.window._refresh()
         self.app.processEvents()
 
-    def _scene_position(self, plot, frequency: float, y: float = -40.0):
+    def _scene_position(self, plot, frequency: float, y: float = DB_FULL_SCALE - 40.0):
         return plot.getViewBox().mapViewToScene(
             QtCore.QPointF(np.log10(frequency / 1_000.0), y)
         )
@@ -465,14 +470,14 @@ class CursorReadoutWindowTests(unittest.TestCase):
         self.assertAlmostEqual(float(y_values[0]), expected_input, places=5)
         self.assertEqual(
             input_curve.label.toPlainText(),
-            f"{expected_input:+.1f} dBFS",
+            f"{expected_input:.1f} dB",
         )
 
         _x, y_values = output_curve.marker.getData()
         self.assertAlmostEqual(float(y_values[0]), expected_output, places=5)
         self.assertEqual(
             output_curve.label.toPlainText(),
-            f"{expected_output:+.1f} dBFS",
+            f"{expected_output:.1f} dB",
         )
         self.assertEqual(input_curve.color, theme.INPUT)
         self.assertEqual(output_curve.color, theme.OUTPUT)
@@ -504,7 +509,7 @@ class CursorReadoutWindowTests(unittest.TestCase):
         self.window.controls.spl_checkbox.setChecked(True)
         self.window._update_input_display()
 
-        # En SPL el eje Y arranca en 0 dB SPL, no en -120 dBFS.
+        # En SPL el eje Y arranca en 0 dB SPL aunque el piso de dB equivalga a menos.
         self.window.readout.handle_mouse(
             self._scene_position(self.window.input_plot, 1_000.0, y=60.0)
         )
@@ -512,7 +517,7 @@ class CursorReadoutWindowTests(unittest.TestCase):
         input_curve = self._curve(self.window.input_plot, "entrada")
         self.assertTrue(input_curve.label.toPlainText().endswith("dB SPL"))
 
-    def test_compare_labels_stay_in_dbfs_when_spl_display_is_active(self):
+    def test_compare_labels_stay_uncalibrated_when_spl_display_is_active(self):
         self.engine.spl_offset_db = 120.0
         self.window.controls.spl_checkbox.setChecked(True)
         self.window._update_input_display()
@@ -522,7 +527,9 @@ class CursorReadoutWindowTests(unittest.TestCase):
         )
 
         compare_input = self._curve(self.window.compare_plot, "entrada")
-        self.assertTrue(compare_input.label.toPlainText().endswith("dBFS"))
+        label = compare_input.label.toPlainText()
+        self.assertTrue(label.endswith(" dB"))
+        self.assertNotIn("SPL", label)
 
     def test_leaving_the_graphics_hides_lines_markers_and_labels(self):
         self.window.readout.handle_mouse(

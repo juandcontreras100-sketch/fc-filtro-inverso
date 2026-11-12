@@ -19,7 +19,7 @@ import time
 import numpy as np
 
 from probar_salida import build_tone
-from verificar_entrada import analyze_capture
+from verificar_entrada import DEFAULT_THRESHOLD_DB, analyze_capture
 
 
 def _find_usb_pnp_input(sd: object) -> int:
@@ -78,9 +78,9 @@ def main(argv: list[str] | None = None) -> int:
         "--amplitude",
         type=float,
         default=0.01,
-        help="amplitud lineal del tono; 0.01 equivale a -40 dBFS",
+        help="amplitud lineal del tono; 0.01 equivale a 100 dB",
     )
-    parser.add_argument("--threshold-dbfs", type=float, default=-60.0)
+    parser.add_argument("--threshold-db", type=float, default=DEFAULT_THRESHOLD_DB)
     parser.add_argument(
         "--yes",
         action="store_true",
@@ -153,15 +153,15 @@ def main(argv: list[str] | None = None) -> int:
     report = analyze_capture(
         np.asarray(recorded[:, 0], dtype=np.float64),
         sample_rate=48_000,
-        threshold_dbfs=args.threshold_dbfs,
+        threshold_db=args.threshold_db,
         tone_frequency=args.frequency,
     )
 
     print()
-    print(f"RMS: {report['rms_dbfs']:.2f} dBFS")
-    print(f"Pico: {report['peak_dbfs']:.2f} dBFS")
+    print(f"RMS: {report['rms_db']:.2f} dB")
+    print(f"Pico: {report['peak_db']:.2f} dB")
     print(
-        f"Tono {args.frequency:.0f} Hz: {report['tone_dbfs']:.2f} dBFS | "
+        f"Tono {args.frequency:.0f} Hz: {report['tone_db']:.2f} dB | "
         f"dominante {report['dominant_frequency_hz']:.1f} Hz | "
         f"SNR espectral {report['tone_snr_db']:.1f} dB"
     )

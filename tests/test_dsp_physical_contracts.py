@@ -3,6 +3,7 @@ import unittest
 import numpy as np
 
 from src.dsp.spectrum import (
+    DB_FULL_SCALE,
     a_weighting_db,
     c_weighting_db,
     equivalent_noise_bandwidth_hz,
@@ -13,22 +14,22 @@ from src.dsp.spectrum import (
 
 
 class PhysicalSpectrumContractTests(unittest.TestCase):
-    def test_full_scale_peak_sine_has_zero_dbfs_peak_and_minus_3_dbfs_rms(self):
+    def test_full_scale_peak_sine_has_full_scale_peak_and_3_db_lower_rms(self):
         samples = np.sin(2.0 * np.pi * np.arange(48_000) / 48_000.0)
 
         rms_db, peak_db = level_db(samples)
 
-        self.assertAlmostEqual(peak_db, 0.0, delta=1e-6)
-        self.assertAlmostEqual(rms_db, -3.0103, delta=1e-3)
+        self.assertAlmostEqual(peak_db, DB_FULL_SCALE, delta=1e-6)
+        self.assertAlmostEqual(rms_db, DB_FULL_SCALE - 3.0103, delta=1e-3)
 
-    def test_minus_20_dbfs_coherent_tone_is_read_within_point_one_db(self):
+    def test_coherent_tone_20_db_below_full_scale_is_read_within_point_one_db(self):
         fft_size = 2048
         bin_index = 46
         samples = 0.1 * np.sin(2.0 * np.pi * bin_index * np.arange(fft_size) / fft_size)
 
         peak_db = float(np.max(spectrum_db(samples, fft_size)))
 
-        self.assertAlmostEqual(peak_db, -20.0, delta=0.1)
+        self.assertAlmostEqual(peak_db, DB_FULL_SCALE - 20.0, delta=0.1)
 
     def test_hann_equivalent_noise_bandwidth_is_one_point_five_bins(self):
         fft_size = 2048
@@ -71,7 +72,7 @@ class PhysicalSpectrumContractTests(unittest.TestCase):
 
         level = total_level_db(samples, weighting="C", sample_rate=sample_rate)
 
-        self.assertAlmostEqual(level, -3.0103, delta=0.02)
+        self.assertAlmostEqual(level, DB_FULL_SCALE - 3.0103, delta=0.02)
 
     def test_spectrum_rejects_non_finite_samples(self):
         with self.assertRaisesRegex(ValueError, "finit"):

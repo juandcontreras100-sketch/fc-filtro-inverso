@@ -7,16 +7,16 @@ import time
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from src.config import CLIP_HOLD_SECONDS
-from src.dsp.spectrum import CLIP_DB
+from src.dsp.spectrum import CLIP_DB, DB_FULL_SCALE
 from src.ui import theme
 
-DB_MIN = -60.0
-DB_MAX = 0.0
-TICK_DBS = (-48.0, -36.0, -24.0, -12.0, -6.0)
+DB_MIN = DB_FULL_SCALE - 60.0
+DB_MAX = DB_FULL_SCALE
+TICK_DBS = tuple(DB_FULL_SCALE + offset for offset in (-48.0, -36.0, -24.0, -12.0, -6.0))
 
 
 def db_to_fraction(db: float) -> float:
-    """Convierte dBFS a una posicion normalizada en la barra."""
+    """Convierte dB a una posicion normalizada en la barra."""
     if db <= DB_MIN:
         return 0.0
     if db >= DB_MAX:
@@ -63,7 +63,7 @@ class LevelMeter(QtWidgets.QWidget):
                 QtCore.QRectF(bar.left(), bar.top(), rms_width, bar.height()), 3, 3
             )
 
-        # Marcas de referencia en la escala de dBFS
+        # Marcas de referencia en la escala de dB
         painter.setPen(QtGui.QPen(QtGui.QColor(theme.PANEL_EDGE), 1))
         for tick_db in TICK_DBS:
             tick_x = bar.left() + bar.width() * db_to_fraction(tick_db)
@@ -95,7 +95,7 @@ class LevelMeter(QtWidgets.QWidget):
         painter.drawText(
             QtCore.QRectF(rect.left() + 8, rect.top() + 4, rect.width() - 16, 16),
             QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
-            f"Pico {self._peak_db:+.1f} / RMS {self._rms_db:+.1f} dB",
+            f"Pico {self._peak_db:.1f} / RMS {self._rms_db:.1f} dB",
         )
 
 

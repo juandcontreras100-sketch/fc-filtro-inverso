@@ -10,8 +10,11 @@ MAX_CONFIGURABLE_GAIN_DB = 30.0
 FREQUENCY_MIN_HZ = 20.0
 FREQUENCY_MAX_HZ = 24_000.0
 
-DBFS_FLOOR_DB = -140.0
-DBFS_CEILING_DB = 6.0
+# Escala de niveles en dB siempre no negativa: 0 dB es el piso de visualizacion
+# y la plena escala digital (amplitud 1.0) vale DB_FULL_SCALE_DB.
+DB_FULL_SCALE_DB = 140.0
+DB_FLOOR_DB = 0.0
+DB_CEILING_DB = DB_FULL_SCALE_DB + 6.0
 CLIP_THRESHOLD_LINEAR = 0.999
 CLIP_HOLD_SECONDS = 1.5
 

@@ -9,6 +9,7 @@ import pyqtgraph as pg
 from PySide6 import QtWidgets
 
 from src.audio.engine import AudioEngine, SpectrumFrame
+from src.dsp.spectrum import DB_FULL_SCALE
 from src.ui import theme
 from src.ui import window as window_module
 from src.ui.window import MainWindow
@@ -35,7 +36,7 @@ class SplPhase2WindowTests(unittest.TestCase):
         self.engine.spl_offset_db = offset_db
         self.window.controls.set_spl_offset(offset_db)
         self.window.controls.set_spl_display(True)
-        self.window._input_total_db = total_spl - offset_db
+        self.window._input_total_db = total_spl - offset_db + DB_FULL_SCALE
         self.window._has_input_total = True
         self.window._update_input_level_axis()
         self.window._update_input_display()
@@ -77,12 +78,12 @@ class SplPhase2WindowTests(unittest.TestCase):
         self.assertFalse(self.window.controls.spl_status_label.isHidden())
         self.assertEqual(
             self.window.controls.spl_status_label.text(),
-            "SIN CALIBRAR: valores en dBFS",
+            "SIN CALIBRAR: valores en dB",
         )
         self.assertTrue(self.window.controls.spl_status_label.wordWrap())
 
     def test_uncalibrated_spl_toggle_never_adopts_120_or_presents_spl(self):
-        self.window._input_total_db = -20.0
+        self.window._input_total_db = 120.0
         self.window._has_input_total = True
 
         self.window.controls.spl_checkbox.setChecked(True)
@@ -92,15 +93,15 @@ class SplPhase2WindowTests(unittest.TestCase):
         self.assertFalse(self.window.controls.spl_status_label.isHidden())
         self.assertEqual(
             self.window.controls.spl_status_label.text(),
-            "SIN CALIBRAR: valores en dBFS",
+            "SIN CALIBRAR: valores en dB",
         )
-        self.assertEqual(self.window.input_plot.getAxis("left").labelUnits, "dBFS")
-        self.assertEqual(self.window.readout._units["entrada"], "dBFS")
-        self.assertEqual(self.window.controls.total_level_label.text(), "-20.0 dBFS (Z)")
+        self.assertEqual(self.window.input_plot.getAxis("left").labelUnits, "dB")
+        self.assertEqual(self.window.readout._units["entrada"], "dB")
+        self.assertEqual(self.window.controls.total_level_label.text(), "120.0 dB (Z)")
         self.assertEqual(self.window.controls.spl_context_label.text(), "")
 
     def test_real_offset_change_clears_uncalibrated_status_and_updates_spl(self):
-        self.window._input_total_db = -20.0
+        self.window._input_total_db = 120.0
         self.window._has_input_total = True
         self.window.controls.spl_checkbox.setChecked(True)
 
@@ -154,7 +155,7 @@ class SplPhase2WindowTests(unittest.TestCase):
 
         self.assertIn(theme.INPUT, self.window.controls.total_level_label.styleSheet())
         self.assertEqual(self.window.controls.spl_context_label.text(), "")
-        self.assertEqual(self.window.controls.total_level_label.text(), "-4.0 dBFS (Z)")
+        self.assertEqual(self.window.controls.total_level_label.text(), "136.0 dB (Z)")
 
     def test_refresh_feeds_every_queued_frame_to_the_open_dialog(self):
         dialog = mock.MagicMock()
