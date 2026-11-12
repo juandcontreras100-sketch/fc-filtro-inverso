@@ -136,8 +136,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         graphs = QtWidgets.QWidget()
         graphs_layout = QtWidgets.QVBoxLayout(graphs)
-        graphs_layout.setContentsMargins(4, 0, 0, 0)
-        graphs_layout.setSpacing(6)
+        graphs_layout.setContentsMargins(2, 0, 0, 0)
+        graphs_layout.setSpacing(2)
 
         self.readout_label = QtWidgets.QLabel(
             "Cursor: pase el raton sobre las graficas para inspeccionar frecuencia y nivel."
@@ -152,6 +152,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.graphics = pg.GraphicsLayoutWidget()
         self.graphics.setBackground(theme.BACKGROUND)
+        # Sin margen de 9 px ni separacion entre filas: las graficas quedan
+        # pegadas al borde y el ViewBox no agrega relleno propio.
+        self.graphics.ci.layout.setContentsMargins(2, 2, 2, 2)
+        self.graphics.ci.layout.setSpacing(2)
         self.graphics.viewport().installEventFilter(self)
         graphs_layout.addWidget(self.graphics)
 
@@ -259,6 +263,14 @@ class MainWindow(QtWidgets.QMainWindow):
             pen=pg.mkPen(theme.OUTPUT, width=1.6), name="|H x H inversa|"
         )
 
+        for view in (
+            self.input_plot.getViewBox(),
+            self.output_plot.getViewBox(),
+            self.filter_plot.getViewBox(),
+            self.filter_view,
+        ):
+            view.setDefaultPadding(0.0)
+
         self.readout = CursorReadout(
             [self.input_plot, self.output_plot, self.filter_plot],
             log_x=True,
@@ -342,13 +354,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self._update_input_display()
             self._apply_band_axis()
             return
-        upper = min(20_000.0, self.engine.nyquist)
-        lower = 20.0 if upper > 20.0 else max(upper * 0.5, 1e-3)
+        lower, upper = self._frequency_axis_bounds()
         # En modo log el ViewBox trabaja con log10(Hz), tambien en setLimits.
         x_min, x_max = np.log10(lower), np.log10(upper)
         limits = {
-            "xMin": np.log10(20.0),
-            "xMax": np.log10(self.engine.nyquist),
+            "xMin": np.log10(lower),
+            "xMax": np.log10(max(float(self.engine.nyquist), lower)),
             "yMin": DB_FLOOR,
             "yMax": DB_CEILING,
         }
@@ -360,6 +371,15 @@ class MainWindow(QtWidgets.QMainWindow):
         # Su eje X esta enlazado a la entrada: arrastrarlo tambien la moveria.
         self.filter_plot.setMouseEnabled(x=False, y=False)
         self._update_filter_curve()
+
+    def _frequency_axis_bounds(self) -> tuple[float, float]:
+        """Extremos visibles del eje X: desde el bin 1 (o 20 Hz) hasta 20 kHz."""
+        first_bin = (
+            float(self._frequencies[1]) if self._frequencies.size > 1 else 20.0
+        )
+        lower = max(20.0, first_bin)
+        upper = min(20_000.0, float(self.engine.nyquist))
+        return lower, max(upper, lower)
 
     def _update_filter_view_geometry(self) -> None:
         output_view = self.output_plot.getViewBox()
@@ -445,13 +465,12 @@ class MainWindow(QtWidgets.QMainWindow):
             plot.setLogMode(x=True, y=False)
             plot.getAxis("bottom").setTicks(None)
         self.filter_plot.setXLink(self.input_plot)
-        upper = min(20_000.0, self.engine.nyquist)
-        lower = 20.0 if upper > 20.0 else max(upper * 0.5, 1e-3)
+        lower, upper = self._frequency_axis_bounds()
         # En modo log el ViewBox trabaja con log10(Hz), tambien en setLimits.
         x_min, x_max = np.log10(lower), np.log10(upper)
         limits = {
-            "xMin": np.log10(20.0),
-            "xMax": np.log10(self.engine.nyquist),
+            "xMin": np.log10(lower),
+            "xMax": np.log10(max(float(self.engine.nyquist), lower)),
             "yMin": DB_FLOOR,
             "yMax": DB_CEILING,
         }

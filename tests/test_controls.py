@@ -175,14 +175,15 @@ class MainWindowLogPlotsTests(unittest.TestCase):
     def tearDown(self):
         self.window.close()
 
-    def test_frequency_plots_use_a_log_axis_from_20_hz_to_20_khz(self):
+    def test_frequency_plots_use_a_log_axis_from_the_first_bin_to_20_khz(self):
         for plot in (self.window.input_plot, self.window.output_plot):
             self.assertTrue(plot.ctrl.logXCheck.isChecked())
             self.assertFalse(plot.ctrl.logYCheck.isChecked())
 
         x_min, x_max = self.window.input_plot.viewRange()[0]
+        first_bin = self.engine.sample_rate / self.engine.fft_size
 
-        self.assertAlmostEqual(x_min, np.log10(20.0), places=5)
+        self.assertAlmostEqual(x_min, np.log10(first_bin), places=5)
         self.assertAlmostEqual(x_max, np.log10(20_000.0), places=5)
 
     def test_third_plot_shows_measured_inverse_and_product(self):
@@ -315,7 +316,8 @@ class MainWindowSpectrumStyleTests(unittest.TestCase):
         self.assertTrue(self.window.input_plot.ctrl.logXCheck.isChecked())
         self.assertIsNone(self.window.input_plot.getAxis("bottom")._tickLevels)
         x_min, x_max = self.window.input_plot.viewRange()[0]
-        self.assertAlmostEqual(x_min, np.log10(20.0), places=5)
+        first_bin = self.engine.sample_rate / self.engine.fft_size
+        self.assertAlmostEqual(x_min, np.log10(first_bin), places=5)
         self.assertAlmostEqual(x_max, np.log10(20_000.0), places=5)
 
 

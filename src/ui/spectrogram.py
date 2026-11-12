@@ -33,7 +33,10 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
         self._image.setColorMap(pg.colormap.get("viridis"))
         self._image.setLevels((DB_FLOOR, DB_CEILING))
 
+        self.ci.layout.setContentsMargins(2, 2, 2, 2)
+        self.ci.layout.setSpacing(2)
         self.plot = self.addPlot()
+        self.plot.getViewBox().setDefaultPadding(0.0)
         theme.style_plot(self.plot, "Cascada de la salida (abajo = mas reciente)")
         self.plot.setLabel("bottom", "Frecuencia", units="Hz")
         self.plot.setLabel("left", "Tiempo hacia atras", units="s")
@@ -68,7 +71,11 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
         self._image.setRect(0.0, 0.0, nyquist, self._rows * self._seconds_per_row)
         self._image.setImage(self._buffer, axisOrder="row-major", levels=self._levels)
 
-        self.plot.setXRange(0.0, nyquist, padding=0)
+        # Igual que las graficas de espectro: el eje arranca en el bin 1 para
+        # no dejar un hueco vacio entre 0 Hz y el primer dato representable.
+        first_bin = nyquist / max(bins - 1, 1)
+        lower = min(max(20.0, first_bin), nyquist)
+        self.plot.setXRange(lower, nyquist, padding=0)
         self.plot.setYRange(0.0, self._rows * self._seconds_per_row, padding=0)
 
     # ----------------------------------------------------------------- datos
