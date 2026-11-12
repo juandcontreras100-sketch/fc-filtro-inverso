@@ -154,6 +154,97 @@ def build_device_options(
     return [(None, DEFAULT_LABEL)] + [(value, label) for value, label, _rank, _i in options]
 
 
+def _offered(device: Mapping[str, Any], hostapis: Sequence[Mapping[str, Any]]) -> bool:
+    upper = str(hostapis[int(device["hostapi"])]["name"]).upper()
+    return not any(token in upper for token in _EXCLUDED_HOST_APIS)
+
+
+def _host_name(device: Mapping[str, Any], hostapis: Sequence[Mapping[str, Any]]) -> str:
+    return str(hostapis[int(device["hostapi"])]["name"])
+
+
+def build_input_options(
+    devices: Sequence[Mapping[str, Any]],
+    hostapis: Sequence[Mapping[str, Any]],
+) -> list[tuple[int | None, str]]:
+    """Microfonos para el inicio de sesion: ``(indice, etiqueta)``.
+
+    Empieza por ``None`` (microfono por defecto del sistema). Se ordenan por
+    API de audio preferida y despues por indice.
+    """
+    found = []
+    for index, device in enumerate(devices):
+        if device["max_input_channels"] > 0 and _offered(device, hostapis):
+            api = _host_name(device, hostapis)
+            found.append((_api_rank(api), index, f"{index}: {device['name']} ({api})"))
+    found.sort()
+    return [(None, "Microfono por defecto del sistema")] + [
+        (index, label) for _rank, index, label in found
+    ]
+
+
+def build_output_options(
+    devices: Sequence[Mapping[str, Any]],
+    hostapis: Sequence[Mapping[str, Any]],
+    input_index: int | None = None,
+) -> list[tuple[int | None, str]]:
+    """Altavoces compatibles con el microfono elegido.
+
+    PortAudio abre entrada y salida en un solo ``Stream`` y ambas deben
+    pertenecer a la misma API de audio; por eso, si se eligio un microfono, solo
+    se ofrecen salidas de su API.
+    """
+    required_api = None
+    if input_index is not None:
+        required_api = int(devices[input_index]["hostapi"])
+    found = []
+    for index, device in enumerate(devices):
+        if device["max_output_channels"] <= 0 or not _offered(device, hostapis):
+            continue
+        if required_api is not None and int(device["hostapi"]) != required_api:
+            continue
+        api = _host_name(device, hostapis)
+        found.append((_api_rank(api), index, f"{index}: {device['name']} ({api})"))
+    found.sort()
+    return [(None, "Altavoz por defecto del sistema")] + [
+        (index, label) for _rank, index, label in found
+    ]
+
+
+def device_pair(input_index: int | None, output_index: int | None) -> Any:
+    """Argumento ``device`` de ``sd.Stream`` para un microfono y un altavoz.
+
+    Si no se eligio ninguno devuelve ``None`` (por defecto del sistema); si solo
+    se eligio uno, el otro queda en ``None`` dentro de la tupla.
+    """
+    if input_index is None and output_index is None:
+        return None
+    return (input_index, output_index)
+
+
+def device_name(devices: Sequence[Mapping[str, Any]], index: int | None) -> str | None:
+    """Nombre de un dispositivo, o ``None``. Los indices cambian; los nombres no."""
+    if index is None or not 0 <= index < len(devices):
+        return None
+    return str(devices[index]["name"])
+
+
+def find_device_by_name(
+    devices: Sequence[Mapping[str, Any]],
+    name: str | None,
+    *,
+    want_input: bool,
+) -> int | None:
+    """Indice del primer dispositivo con ese nombre y el tipo pedido, o ``None``."""
+    if not name:
+        return None
+    key = "max_input_channels" if want_input else "max_output_channels"
+    for index, device in enumerate(devices):
+        if device["name"] == name and device[key] > 0:
+            return index
+    return None
+
+
 def available_devices() -> list[tuple[Any, str]]:
     """Consulta PortAudio y devuelve las opciones para el combo."""
     import sounddevice as sd

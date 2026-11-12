@@ -36,7 +36,7 @@ class ControlPanel(QtWidgets.QWidget):
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(4, 2, 4, 4)
-        root.setSpacing(5)
+        root.setSpacing(8)
 
         root.addWidget(self._build_mode_group())
         root.addWidget(self._build_calibration_group())
