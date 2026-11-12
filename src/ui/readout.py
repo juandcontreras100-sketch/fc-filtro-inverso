@@ -31,6 +31,8 @@ class _CursorCurve:
     view: Any
     marker: pg.ScatterPlotItem
     label: pg.TextItem
+    # Clave en ``set_spectra``; permite que una curva muestre otra unidad.
+    data_key: str
 
 
 class CursorReadout:
@@ -70,9 +72,11 @@ class CursorReadout:
         self._labels: np.ndarray | None = None
         self._spectra: dict[str, np.ndarray] = {}
         self._units: dict[str, str] = {}
+        self._names: dict[str, str] = {}
 
     def _add_curve(self, plot: pg.PlotItem, spec: Mapping[str, Any]) -> None:
         name = str(spec["name"])
+        data_key = str(spec.get("data", name))
         color = str(spec.get("color", theme.CURSOR))
         view = spec.get("view") or plot.getViewBox()
 
@@ -104,6 +108,7 @@ class CursorReadout:
                 view=view,
                 marker=marker,
                 label=label,
+                data_key=data_key,
             )
         )
 
@@ -113,6 +118,7 @@ class CursorReadout:
         spectra: dict[str, np.ndarray],
         units: dict[str, str] | None = None,
         labels: np.ndarray | None = None,
+        names: dict[str, str] | None = None,
     ) -> None:
         """Actualiza los datos que se leen al mover el cursor.
 
@@ -125,6 +131,7 @@ class CursorReadout:
             for name, values in spectra.items()
         }
         self._units = {} if units is None else units
+        self._names = {} if names is None else names
         self._labels = None if labels is None else np.asarray(labels, dtype=np.float64)
 
     def handle_mouse(self, position: QtCore.QPointF) -> str | None:
@@ -150,7 +157,10 @@ class CursorReadout:
             line.setVisible(True)
 
         for curve in self._curves:
-            values = self._spectra.get(curve.name)
+            values = self._spectra.get(curve.data_key)
+            if values is None:
+                # Sin datos propios se usa la serie del mismo nombre.
+                values = self._spectra.get(curve.name)
             if values is None or values.size == 0:
                 curve.marker.setVisible(False)
                 curve.label.setVisible(False)
@@ -209,7 +219,7 @@ class CursorReadout:
         label_y = y + _LABEL_GAP_Y * pixel_height
         curve.label.setPos(label_x, label_y)
 
-        unit = self._units.get(curve.name, "dB")
+        unit = self._units.get(curve.data_key) or self._units.get(curve.name, "dB")
         curve.label.setText(f"{y:+.1f} {unit}")
         curve.label.setVisible(True)
 
@@ -223,5 +233,6 @@ class CursorReadout:
                 continue
             level = float(np.interp(frequency, domain, values))
             unit = self._units.get(name, "dB")
-            parts.append(f"{name} {level:+.1f} {unit}")
+            label = self._names.get(name, name)
+            parts.append(f"{label} {level:+.1f} {unit}")
         return "  |  ".join(parts)

@@ -83,13 +83,28 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(font.fixedPitch())
         self.assertTrue(self.window.styleSheet())
 
+    def test_the_third_plot_compares_input_and_output_in_dbfs(self):
+        compare = self.window.compare_plot
+
+        self.assertTrue(compare.ctrl.logXCheck.isChecked())
+        self.assertIs(
+            compare.getViewBox().linkedView(compare.getViewBox().XAxis),
+            self.window.input_plot.getViewBox(),
+        )
+        self.assertEqual(compare.getAxis("left").labelUnits, "dBFS")
+        self.assertIsNotNone(compare.legend)
+        self.assertEqual(
+            [label.text for _sample, label in compare.legend.items],
+            ["Entrada", "Salida"],
+        )
+
     def test_readout_covers_all_three_frequency_plots_with_monospace_font(self):
         self.assertEqual(
             self.window.readout._plots,
             [
                 self.window.input_plot,
                 self.window.output_plot,
-                self.window.filter_plot,
+                self.window.compare_plot,
             ],
         )
         self.assertTrue(self.window.readout_label.font().fixedPitch())

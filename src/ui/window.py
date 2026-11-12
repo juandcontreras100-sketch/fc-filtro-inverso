@@ -236,43 +236,34 @@ class MainWindow(QtWidgets.QMainWindow):
         self.output_bars.hide()
 
         self.graphics.nextRow()
-        self.filter_plot = self.graphics.addPlot(title="Respuesta del filtro")
-        theme.style_plot(self.filter_plot, "Respuesta del filtro")
-        self.filter_plot.setLabel("left", "Ganancia", units="dB")
-        self.filter_plot.setLabel("bottom", "Frecuencia", units="Hz")
-        self.filter_plot.setLogMode(x=True, y=False)
-        self.filter_plot.setXLink(self.input_plot)
-        self.filter_plot.showGrid(x=True, y=True, alpha=0.22)
-        self.filter_plot.setYRange(-6.0, 6.0, padding=0)
-        self.filter_plot.addItem(
-            pg.InfiniteLine(
-                pos=0.0,
-                angle=0,
-                movable=False,
-                pen=pg.mkPen(theme.PANEL_EDGE, width=1, style=QtCore.Qt.DotLine),
-            )
+        self.compare_plot = self.graphics.addPlot(
+            title="Comparacion entrada/salida"
         )
-        self.filter_plot.addLegend(offset=(12, 12), labelTextColor=theme.MUTED)
-        self.h_measured_curve = self.filter_plot.plot(
-            pen=pg.mkPen(theme.INPUT, width=1.5), name="|H| medida"
+        theme.style_plot(self.compare_plot, "Comparacion entrada/salida")
+        self.compare_plot.setLabel("left", "Magnitud", units="dBFS")
+        self.compare_plot.setLabel("bottom", "Frecuencia", units="Hz")
+        self.compare_plot.setLogMode(x=True, y=False)
+        self.compare_plot.setXLink(self.input_plot)
+        self.compare_plot.showGrid(x=True, y=True, alpha=0.22)
+        self.compare_plot.setYRange(DB_FLOOR, DB_CEILING, padding=0)
+        self.compare_plot.addLegend(offset=(12, 12), labelTextColor=theme.MUTED)
+        self.compare_input_curve = self.compare_plot.plot(
+            pen=pg.mkPen(theme.INPUT, width=1.5), name="Entrada"
         )
-        self.h_inverse_curve = self.filter_plot.plot(
-            pen=pg.mkPen(theme.FILTER, width=1.5), name="|H inversa|"
-        )
-        self.h_product_curve = self.filter_plot.plot(
-            pen=pg.mkPen(theme.OUTPUT, width=1.6), name="|H x H inversa|"
+        self.compare_output_curve = self.compare_plot.plot(
+            pen=pg.mkPen(theme.OUTPUT, width=1.5), name="Salida"
         )
 
         for view in (
             self.input_plot.getViewBox(),
             self.output_plot.getViewBox(),
-            self.filter_plot.getViewBox(),
+            self.compare_plot.getViewBox(),
             self.filter_view,
         ):
             view.setDefaultPadding(0.0)
 
         self.readout = CursorReadout(
-            [self.input_plot, self.output_plot, self.filter_plot],
+            [self.input_plot, self.output_plot, self.compare_plot],
             log_x=True,
             curves=[
                 [{"name": "entrada", "color": theme.INPUT}],
@@ -284,7 +275,14 @@ class MainWindow(QtWidgets.QMainWindow):
                         "view": self.filter_view,
                     },
                 ],
-                [{"name": "filtro", "color": theme.FILTER}],
+                [
+                    {
+                        "name": "entrada",
+                        "color": theme.INPUT,
+                        "data": "entrada_dbfs",
+                    },
+                    {"name": "salida", "color": theme.OUTPUT},
+                ],
             ],
         )
 
@@ -349,7 +347,6 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if self._spectrum_style == "barras":
             # El eje X usa indices de banda: se rehace el agrupado por bandas.
-            self.filter_plot.setMouseEnabled(x=False, y=False)
             self._update_filter_curve()
             self._update_input_display()
             self._apply_band_axis()
@@ -368,8 +365,8 @@ class MainWindow(QtWidgets.QMainWindow):
             plot.setLimits(**limits)
             plot.setXRange(x_min, x_max, padding=0)
         self._update_input_level_axis()
-        # Su eje X esta enlazado a la entrada: arrastrarlo tambien la moveria.
-        self.filter_plot.setMouseEnabled(x=False, y=False)
+        # La comparacion sigue el mismo eje X, sin pan ni zoom propios.
+        self.compare_plot.setMouseEnabled(x=False, y=False)
         self._update_filter_curve()
 
     def _frequency_axis_bounds(self) -> tuple[float, float]:
@@ -416,14 +413,24 @@ class MainWindow(QtWidgets.QMainWindow):
             input_unit = "dB SPL"
         if input_values.size == self._frequencies.size:
             self.input_curve.setData(self._frequencies[1:], input_values[1:])
+        if self._output_db.size == self._frequencies.size:
+            self.compare_output_curve.setData(
+                self._frequencies[1:], self._output_db[1:]
+            )
+        if self._input_db.size == self._frequencies.size:
+            self.compare_input_curve.setData(
+                self._frequencies[1:], self._input_db[1:]
+            )
+
+        spectra = {"entrada": input_values, "salida": self._output_db}
+        units = {"entrada": input_unit, "salida": "dBFS"}
+        if input_unit != "dBFS":
+            # La comparacion siempre muestra la entrada en dBFS.
+            spectra["entrada_dbfs"] = self._input_db
+            units["entrada_dbfs"] = "dBFS"
+        names = {"entrada_dbfs": "entrada (dBFS)"} if "entrada_dbfs" in spectra else None
         self.readout.set_spectra(
-            self._frequencies,
-            {
-                "entrada": input_values,
-                "salida": self._output_db,
-                "filtro": self._filter_db,
-            },
-            units={"entrada": input_unit, "salida": "dBFS", "filtro": "dB"},
+            self._frequencies, spectra, units=units, names=names
         )
 
     # ------------------------------------------------------ vista del espectro
@@ -437,6 +444,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.input_curve.setVisible(False)
             self.output_curve.setVisible(False)
             self.filter_curve.setVisible(False)
+            self.compare_input_curve.setVisible(False)
+            self.compare_output_curve.setVisible(False)
             self.input_bars.setVisible(True)
             self.output_bars.setVisible(True)
             self.filter_band_curve.setVisible(True)
@@ -444,8 +453,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.readout_label.setText(
                 "Vista de barras 1/3 oct: el cursor solo lee valores en modo Linea."
             )
-            # El eje del filtro estaba enlazado a la entrada, que ahora usa indices.
-            self.filter_plot.setXLink(None)
+            # El eje X de la comparacion no puede seguir indices de banda.
+            self.compare_plot.setXLink(None)
             self.filter_view.setLogMode("x", False)
             for plot in (self.input_plot, self.output_plot):
                 plot.setLogMode(x=False, y=False)
@@ -456,6 +465,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.input_curve.setVisible(True)
         self.output_curve.setVisible(True)
         self.filter_curve.setVisible(True)
+        self.compare_input_curve.setVisible(True)
+        self.compare_output_curve.setVisible(True)
         self.input_bars.setVisible(False)
         self.output_bars.setVisible(False)
         self.filter_band_curve.setVisible(False)
@@ -464,7 +475,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for plot in (self.input_plot, self.output_plot):
             plot.setLogMode(x=True, y=False)
             plot.getAxis("bottom").setTicks(None)
-        self.filter_plot.setXLink(self.input_plot)
+        self.compare_plot.setXLink(self.input_plot)
         lower, upper = self._frequency_axis_bounds()
         # En modo log el ViewBox trabaja con log10(Hz), tambien en setLimits.
         x_min, x_max = np.log10(lower), np.log10(upper)
@@ -836,22 +847,10 @@ class MainWindow(QtWidgets.QMainWindow):
             measured_db = gain_db(self.engine.h_response)
             product_db = gain_db(self.engine.h_response * h_inverse)
 
+        # Se conservan para el CSV aunque la tercera grafica sea la comparacion.
         self._measured_db = measured_db
         self._inverse_db = inverse_db
         self._product_db = product_db
-
-        frequencies = self._frequencies
-        self.h_measured_curve.setData(frequencies[1:], measured_db[1:])
-        self.h_inverse_curve.setData(frequencies[1:], inverse_db[1:])
-        self.h_product_curve.setData(frequencies[1:], product_db[1:])
-
-        values = np.concatenate((measured_db[1:], inverse_db[1:], product_db[1:]))
-        if values.size:
-            self.filter_plot.setYRange(
-                min(-1.0, float(np.min(values)) - 3.0),
-                max(1.0, float(np.max(values)) + 3.0),
-                padding=0,
-            )
 
     # --------------------------------------------------------------- sesion
     def _on_record_toggled(self, recording: bool) -> None:

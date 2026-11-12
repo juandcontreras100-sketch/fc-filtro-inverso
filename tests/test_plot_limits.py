@@ -22,6 +22,10 @@ class MainWindowPlotLimitsTests(unittest.TestCase):
         # Nyquist = 20 kHz, el mismo limite superior que muestran las graficas.
         self.engine = AudioEngine(sample_rate=40_000.0, fft_size=512)
         self.window = MainWindow(self.engine)
+        # La vista enlazada alinea por geometria: hace falta un layout real.
+        self.window.show()
+        self.window.resize(1_200, 800)
+        self.app.processEvents()
 
     def tearDown(self):
         self.window.close()
@@ -37,7 +41,11 @@ class MainWindowPlotLimitsTests(unittest.TestCase):
         first_bin = self.engine.sample_rate / self.engine.fft_size
         self.assertGreater(first_bin, 20.0)
 
-        for plot in (self.window.input_plot, self.window.output_plot):
+        for plot in (
+            self.window.input_plot,
+            self.window.output_plot,
+            self.window.compare_plot,
+        ):
             with self.subTest(plot=plot.titleLabel.text):
                 x_range, y_range = plot.viewRange()
                 # El eje X es logaritmico: viewRange devuelve log10(Hz).
@@ -70,7 +78,7 @@ class MainWindowPlotLimitsTests(unittest.TestCase):
         for view in (
             self.window.input_plot.getViewBox(),
             self.window.output_plot.getViewBox(),
-            self.window.filter_plot.getViewBox(),
+            self.window.compare_plot.getViewBox(),
             self.window.filter_view,
             self.window.spectrogram.plot.getViewBox(),
         ):

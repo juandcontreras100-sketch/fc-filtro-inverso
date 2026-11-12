@@ -186,7 +186,7 @@ class MainWindowLogPlotsTests(unittest.TestCase):
         self.assertAlmostEqual(x_min, np.log10(first_bin), places=5)
         self.assertAlmostEqual(x_max, np.log10(20_000.0), places=5)
 
-    def test_third_plot_shows_measured_inverse_and_product(self):
+    def test_measured_inverse_and_product_stay_available_for_the_csv(self):
         bins = self.engine.bin_count
         self.engine.h_response = np.ones(bins, dtype=np.complex128)
         self.engine.bypass = False
@@ -194,17 +194,29 @@ class MainWindowLogPlotsTests(unittest.TestCase):
 
         self.window._update_filter_curve()
 
-        _frequencies, measured = self.window.h_measured_curve.getData()
-        _frequencies, inverse = self.window.h_inverse_curve.getData()
-        _frequencies, product = self.window.h_product_curve.getData()
-
-        self.assertEqual(measured.size, bins - 1)
-        np.testing.assert_allclose(measured, 0.0, atol=1e-6)
+        self.assertEqual(self.window._measured_db.size, bins)
+        np.testing.assert_allclose(self.window._measured_db, 0.0, atol=1e-6)
         # El inverso Wiener/Tikhonov queda apenas por debajo de 0 dB.
-        np.testing.assert_allclose(inverse, 0.0, atol=1.0)
-        np.testing.assert_allclose(product, 0.0, atol=1.0)
+        np.testing.assert_allclose(self.window._inverse_db, 0.0, atol=1.0)
+        np.testing.assert_allclose(self.window._product_db, 0.0, atol=1.0)
 
-    def test_third_plot_is_flat_in_bypass_and_without_calibration(self):
+    def test_compare_plot_overlays_input_and_output_in_dbfs(self):
+        bins = self.engine.bin_count
+        self.window._input_db = np.full(bins, -20.0)
+        self.window._output_db = np.full(bins, -35.0)
+
+        self.window._update_input_display()
+
+        frequencies, input_values = self.window.compare_input_curve.getOriginalDataset()
+        _frequencies, output_values = (
+            self.window.compare_output_curve.getOriginalDataset()
+        )
+
+        np.testing.assert_allclose(frequencies, self.window._frequencies[1:])
+        np.testing.assert_allclose(input_values, -20.0)
+        np.testing.assert_allclose(output_values, -35.0)
+
+    def test_response_curves_are_flat_in_bypass_and_without_calibration(self):
         bins = self.engine.bin_count
         self.engine.h_response = np.full(bins, 10.0, dtype=np.complex128)
         self.engine.bypass = True
@@ -234,12 +246,11 @@ class MainWindowLogPlotsTests(unittest.TestCase):
         self.assertAlmostEqual(y_max, expected, places=9)
 
     def _assert_flat_curves(self) -> None:
-        for curve in (
-            self.window.h_measured_curve,
-            self.window.h_inverse_curve,
-            self.window.h_product_curve,
+        for values in (
+            self.window._measured_db,
+            self.window._inverse_db,
+            self.window._product_db,
         ):
-            _frequencies, values = curve.getData()
             np.testing.assert_allclose(values, 0.0, atol=1e-9)
 
 
@@ -423,9 +434,10 @@ class CursorReadoutWindowTests(unittest.TestCase):
 
         input_curve = self._curve(self.window.input_plot, "entrada")
         output_curve = self._curve(self.window.output_plot, "salida")
-        filter_curve = self._curve(self.window.filter_plot, "filtro")
+        compare_input = self._curve(self.window.compare_plot, "entrada")
+        compare_output = self._curve(self.window.compare_plot, "salida")
 
-        for curve in (input_curve, output_curve, filter_curve):
+        for curve in (input_curve, output_curve, compare_input, compare_output):
             self.assertTrue(curve.marker.isVisible())
             self.assertTrue(curve.label.isVisible())
 
@@ -444,7 +456,8 @@ class CursorReadoutWindowTests(unittest.TestCase):
         )
         self.assertEqual(input_curve.color, theme.INPUT)
         self.assertEqual(output_curve.color, theme.OUTPUT)
-        self.assertEqual(filter_curve.color, theme.FILTER)
+        self.assertEqual(compare_input.color, theme.INPUT)
+        self.assertEqual(compare_output.color, theme.OUTPUT)
 
     def test_label_flips_to_the_right_half_of_the_plot(self):
         curve = self._curve(self.window.input_plot, "entrada")
@@ -478,6 +491,18 @@ class CursorReadoutWindowTests(unittest.TestCase):
 
         input_curve = self._curve(self.window.input_plot, "entrada")
         self.assertTrue(input_curve.label.toPlainText().endswith("dB SPL"))
+
+    def test_compare_labels_stay_in_dbfs_when_spl_display_is_active(self):
+        self.engine.spl_offset_db = 120.0
+        self.window.controls.spl_checkbox.setChecked(True)
+        self.window._update_input_display()
+
+        self.window.readout.handle_mouse(
+            self._scene_position(self.window.compare_plot, 1_000.0)
+        )
+
+        compare_input = self._curve(self.window.compare_plot, "entrada")
+        self.assertTrue(compare_input.label.toPlainText().endswith("dBFS"))
 
     def test_leaving_the_graphics_hides_lines_markers_and_labels(self):
         self.window.readout.handle_mouse(
