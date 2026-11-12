@@ -18,8 +18,9 @@ from src.ui import theme
 class CursorReadout:
     """Linea de cursor compartida entre varios ``PlotItem``."""
 
-    def __init__(self, plots: Sequence[pg.PlotItem]) -> None:
+    def __init__(self, plots: Sequence[pg.PlotItem], log_x: bool = False) -> None:
         self._plots = list(plots)
+        self._log_x = bool(log_x)
         self._lines: list[pg.InfiniteLine] = []
         for plot in self._plots:
             line = pg.InfiniteLine(
@@ -33,14 +34,17 @@ class CursorReadout:
 
         self._frequencies = np.zeros(0)
         self._spectra: dict[str, np.ndarray] = {}
+        self._units: dict[str, str] = {}
 
     def set_spectra(
         self,
         frequencies: np.ndarray,
         spectra: dict[str, np.ndarray],
+        units: dict[str, str] | None = None,
     ) -> None:
         self._frequencies = frequencies
         self._spectra = spectra
+        self._units = {} if units is None else units
 
     def handle_mouse(self, position: QtCore.QPointF) -> str | None:
         """Actualiza las lineas y devuelve el texto de lectura, o ``None``."""
@@ -50,7 +54,10 @@ class CursorReadout:
                 point = view.mapSceneToView(position)
                 line.setPos(point.x())
                 line.setVisible(True)
-                return self._describe(point.x())
+                frequency = point.x()
+                if self._log_x:
+                    frequency = 10.0 ** frequency
+                return self._describe(frequency)
         for line in self._lines:
             line.setVisible(False)
         return None
@@ -63,5 +70,6 @@ class CursorReadout:
             if values.size != self._frequencies.size:
                 continue
             level = float(np.interp(frequency, self._frequencies, values))
-            parts.append(f"{name} {level:+.1f} dB")
+            unit = self._units.get(name, "dB")
+            parts.append(f"{name} {level:+.1f} {unit}")
         return "  |  ".join(parts)

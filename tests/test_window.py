@@ -7,6 +7,7 @@ import numpy as np
 import pyqtgraph as pg
 
 from src.audio.engine import AudioEngine
+from src.ui import theme
 from src.ui.window import MainWindow
 
 
@@ -51,3 +52,41 @@ class MainWindowTests(unittest.TestCase):
         message = self.window.statusBar().currentMessage().lower()
         self.assertIn("realimentación", message)
         self.assertIn("nivel", message)
+
+    def test_theme_provides_dark_stylesheet_and_monospace_font(self):
+        qss = theme.stylesheet()
+        font = theme.mono_font()
+
+        self.assertIn(theme.BACKGROUND, qss)
+        self.assertIn(theme.PANEL, qss)
+        self.assertTrue(font.fixedPitch())
+        self.assertTrue(self.window.styleSheet())
+
+    def test_readout_covers_all_three_frequency_plots_with_monospace_font(self):
+        self.assertEqual(
+            self.window.readout._plots,
+            [
+                self.window.input_plot,
+                self.window.output_plot,
+                self.window.filter_plot,
+            ],
+        )
+        self.assertTrue(self.window.readout_label.font().fixedPitch())
+        self.assertTrue(self.window.controls.gain_label.font().fixedPitch())
+        self.assertTrue(self.window.controls.total_level_label.font().fixedPitch())
+
+    def test_status_badge_reflects_bypass_uncalibrated_and_active_states(self):
+        self.window.engine.bypass = True
+        self.window._update_mode_status()
+        self.assertEqual(self.window.controls.status_state, "bypass")
+
+        self.window.engine.bypass = False
+        self.window.engine.h_response = None
+        self.window._update_mode_status()
+        self.assertEqual(self.window.controls.status_state, "warning")
+
+        self.window.engine.h_response = np.ones(
+            self.window.engine.bin_count, dtype=np.complex128
+        )
+        self.window._update_mode_status()
+        self.assertEqual(self.window.controls.status_state, "active")

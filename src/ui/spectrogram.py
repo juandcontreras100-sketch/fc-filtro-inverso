@@ -33,7 +33,8 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
         self._image.setColorMap(pg.colormap.get("viridis"))
         self._image.setLevels((DB_FLOOR, DB_CEILING))
 
-        self.plot = self.addPlot(title="Cascada de la salida (abajo = mas reciente)")
+        self.plot = self.addPlot()
+        theme.style_plot(self.plot, "Cascada de la salida (abajo = mas reciente)")
         self.plot.setLabel("bottom", "Frecuencia", units="Hz")
         self.plot.setLabel("left", "Tiempo hacia atras", units="s")
         self.plot.setMouseEnabled(x=False, y=False)

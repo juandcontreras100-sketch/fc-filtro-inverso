@@ -11,6 +11,7 @@ from src.ui import theme
 
 DB_MIN = -60.0
 DB_MAX = 0.0
+TICK_DBS = (-48.0, -36.0, -24.0, -12.0, -6.0)
 
 
 def db_to_fraction(db: float) -> float:
@@ -31,7 +32,7 @@ class LevelMeter(QtWidgets.QWidget):
         self._color = color
         self._rms_db = DB_MIN
         self._peak_db = DB_MIN
-        self.setMinimumHeight(48)
+        self.setMinimumHeight(50)
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
 
     def set_levels(self, rms_db: float, peak_db: float) -> None:
@@ -45,12 +46,13 @@ class LevelMeter(QtWidgets.QWidget):
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
 
         rect = self.rect().adjusted(0, 0, -1, -1)
-        painter.setPen(QtCore.Qt.NoPen)
+        painter.setPen(QtGui.QPen(QtGui.QColor(theme.PANEL_EDGE), 1))
         painter.setBrush(QtGui.QColor(theme.PANEL))
-        painter.drawRoundedRect(rect, 5, 5)
+        painter.drawRoundedRect(rect, 6, 6)
 
-        bar = QtCore.QRectF(rect.left() + 8, rect.top() + 24, max(rect.width() - 16, 1), 15)
-        painter.setBrush(QtGui.QColor(theme.PANEL_EDGE))
+        bar = QtCore.QRectF(rect.left() + 8, rect.top() + 25, max(rect.width() - 16, 1), 14)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QColor(theme.SURFACE))
         painter.drawRoundedRect(bar, 3, 3)
 
         rms_width = bar.width() * db_to_fraction(self._rms_db)
@@ -60,24 +62,39 @@ class LevelMeter(QtWidgets.QWidget):
                 QtCore.QRectF(bar.left(), bar.top(), rms_width, bar.height()), 3, 3
             )
 
+        # Marcas de referencia en la escala de dBFS
+        painter.setPen(QtGui.QPen(QtGui.QColor(theme.PANEL_EDGE), 1))
+        for tick_db in TICK_DBS:
+            tick_x = bar.left() + bar.width() * db_to_fraction(tick_db)
+            painter.drawLine(
+                QtCore.QPointF(tick_x, bar.bottom() - 3),
+                QtCore.QPointF(tick_x, bar.bottom()),
+            )
+
         peak_x = bar.left() + bar.width() * db_to_fraction(self._peak_db)
         painter.setPen(QtGui.QPen(QtGui.QColor(theme.PEAK), 2))
-        painter.drawLine(QtCore.QPointF(peak_x, bar.top() - 1), QtCore.QPointF(peak_x, bar.bottom() + 1))
+        painter.drawLine(
+            QtCore.QPointF(peak_x, bar.top() - 1),
+            QtCore.QPointF(peak_x, bar.bottom() + 1),
+        )
 
-        font = painter.font()
-        font.setPointSize(9)
-        painter.setFont(font)
+        title_font = painter.font()
+        title_font.setPointSize(9)
+        title_font.setBold(True)
+        painter.setFont(title_font)
         painter.setPen(QtGui.QColor(theme.TEXT))
         painter.drawText(
-            QtCore.QRectF(rect.left() + 8, rect.top() + 3, rect.width() - 16, 16),
+            QtCore.QRectF(rect.left() + 8, rect.top() + 4, rect.width() - 16, 16),
             QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
             self._title,
         )
+
+        painter.setFont(theme.mono_font(8))
         painter.setPen(QtGui.QColor(theme.MUTED))
         painter.drawText(
-            QtCore.QRectF(rect.left() + 8, rect.top() + 3, rect.width() - 16, 16),
+            QtCore.QRectF(rect.left() + 8, rect.top() + 4, rect.width() - 16, 16),
             QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
-            f"{self._peak_db:+.1f} / {self._rms_db:+.1f} dB",
+            f"Pico {self._peak_db:+.1f} / RMS {self._rms_db:+.1f} dB",
         )
 
 
@@ -110,20 +127,21 @@ class ClipIndicator(QtWidgets.QWidget):
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
         rect = self.rect().adjusted(0, 0, -1, -1)
 
-        painter.setPen(QtCore.Qt.NoPen)
-        painter.setBrush(QtGui.QColor(theme.PANEL))
+        border_color = theme.CLIP if self._hot else theme.PANEL_EDGE
+        bg_color = "#3a1820" if self._hot else theme.PANEL
+        painter.setPen(QtGui.QPen(QtGui.QColor(border_color), 1))
+        painter.setBrush(QtGui.QColor(bg_color))
         painter.drawRoundedRect(rect, 4, 4)
 
+        painter.setPen(QtCore.Qt.NoPen)
         color = QtGui.QColor(theme.CLIP if self._hot else theme.PANEL_EDGE)
         painter.setBrush(color)
-        painter.drawEllipse(QtCore.QRectF(rect.left() + 5, rect.top() + 5, 10, 10))
+        painter.drawEllipse(QtCore.QRectF(rect.left() + 6, rect.top() + 5, 9, 9))
 
-        font = painter.font()
-        font.setPointSize(9)
-        painter.setFont(font)
+        painter.setFont(theme.mono_font(8, bold=True))
         painter.setPen(QtGui.QColor(theme.CLIP if self._hot else theme.MUTED))
         painter.drawText(
-            QtCore.QRectF(rect.left() + 19, rect.top(), rect.width() - 22, rect.height()),
+            QtCore.QRectF(rect.left() + 20, rect.top(), rect.width() - 22, rect.height()),
             QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
             "CLIP",
         )
@@ -135,20 +153,25 @@ class MeterPanel(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(6, 6, 6, 4)
         layout.setSpacing(6)
+
+        header = QtWidgets.QHBoxLayout()
+        header.setContentsMargins(2, 0, 2, 0)
+        title = QtWidgets.QLabel("NIVELES EN TIEMPO REAL")
+        title.setStyleSheet(
+            f"color: {theme.ACCENT}; font-weight: 700; font-size: 8pt;"
+        )
+        self.clip = ClipIndicator()
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(self.clip)
+        layout.addLayout(header)
 
         self.input_meter = LevelMeter("Entrada", theme.INPUT)
         self.output_meter = LevelMeter("Salida", theme.OUTPUT)
         layout.addWidget(self.input_meter)
         layout.addWidget(self.output_meter)
-
-        row = QtWidgets.QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        self.clip = ClipIndicator()
-        row.addWidget(self.clip)
-        row.addStretch(1)
-        layout.addLayout(row)
 
     def set_input(self, rms_db: float, peak_db: float) -> None:
         self.input_meter.set_levels(rms_db, peak_db)
