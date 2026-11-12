@@ -19,7 +19,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 from src.ui.spl_persistence import input_device_name, load_spl_calibration
 
@@ -56,6 +56,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epsilon-base", type=float, default=0.02)
     parser.add_argument("--max-gain-db", type=float, default=12.0)
     parser.add_argument("--spl-offset", type=float, default=None)
+    parser.add_argument(
+        "--sin-login",
+        action="store_true",
+        help="no pedir usuario ni dispositivos al arrancar",
+    )
     return parser.parse_args()
 
 
@@ -71,6 +76,25 @@ def available_devices() -> list[tuple[Any, str]]:
     from src.audio.devices import available_devices as _available_devices
 
     return _available_devices()
+
+
+def session_device_names(
+    device: Any,
+    devices: Sequence[Mapping[str, Any]],
+    hostapis: Sequence[Mapping[str, Any]],
+) -> dict[str, str | None]:
+    """Nombres de entrada y salida que se guardan en la metadata de la sesion."""
+    from src.audio.devices import device_name, device_pair
+
+    if isinstance(device, (tuple, list)) and len(device) == 2:
+        pair = device_pair(device[0], device[1], devices, hostapis)
+        input_index, output_index = (None, None) if pair is None else pair
+        return {
+            "entrada": device_name(devices, input_index),
+            "salida": device_name(devices, output_index),
+        }
+    name = device_name(devices, device)
+    return {"entrada": name, "salida": name}
 
 
 def apply_spl_calibration(
@@ -132,13 +156,39 @@ def main() -> int:
 
     from src.audio.devices import combine_device_arg
     from src.audio.engine import AudioEngine
+    from src.storage.profiles import ProfileStore
+    from src.ui.login import LoginDialog
     from src.ui.window import MainWindow
 
     try:
-        device = combine_device_arg(args.device, args.input_device, args.output_device)
+        cli_device = combine_device_arg(
+            args.device, args.input_device, args.output_device
+        )
     except ValueError as error:
         print(error, file=sys.stderr)
         return 2
+
+    app = pg.mkQApp("Ecualizador FFT")
+    devices = list(sd.query_devices())
+    hostapis = list(sd.query_hostapis())
+
+    profile = None
+    dialog_device = None
+    if not args.sin_login:
+        dialog = LoginDialog(devices, hostapis, ProfileStore())
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return 0
+        profile = dialog.profile
+        dialog_device = dialog.device
+
+    # La linea de comandos manda sobre lo elegido en el dialogo.
+    device = cli_device if cli_device is not None else dialog_device
+    device_names = session_device_names(device, devices, hostapis)
+    if device is None:
+        device_names = {
+            "entrada": sd.query_devices(kind="input")["name"],
+            "salida": sd.query_devices(kind="output")["name"],
+        }
 
     engine = AudioEngine(
         sample_rate=args.sample_rate,
@@ -158,9 +208,8 @@ def main() -> int:
         engine.bypass = False
         engine.recompute_inverse()
 
-    app = pg.mkQApp("Ecualizador FFT")
     apply_spl_calibration(engine, args.spl_offset, device, QtWidgets)
-    window = MainWindow(engine)
+    window = MainWindow(engine, user=profile, devices=device_names)
     window.controls.populate_devices(available_devices())
     window.controls.set_device(engine.device)
     window.show()

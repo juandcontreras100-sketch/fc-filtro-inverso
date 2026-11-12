@@ -7,6 +7,7 @@ import numpy as np
 import pyqtgraph as pg
 
 from src.audio.engine import AudioEngine
+from src.storage.profiles import UserProfile
 from src.ui import theme
 from src.ui.window import MainWindow
 
@@ -21,6 +22,26 @@ class MainWindowTests(unittest.TestCase):
 
     def tearDown(self):
         self.window.close()
+
+    def test_the_logged_in_user_and_devices_are_remembered_by_the_window(self):
+        profile = UserProfile("Juan Perez", "1234567")
+        window = MainWindow(
+            AudioEngine(sample_rate=48_000.0, fft_size=512),
+            user=profile,
+            devices={"entrada": "Microfono", "salida": "Altavoz"},
+        )
+        self.addCleanup(window.close)
+
+        self.assertIs(window.user, profile)
+        self.assertEqual(
+            window.devices, {"entrada": "Microfono", "salida": "Altavoz"}
+        )
+        self.assertIn("Juan Perez", window.windowTitle())
+
+    def test_without_a_user_the_title_has_no_name(self):
+        self.assertEqual(
+            self.window.windowTitle(), "Ecualizador FFT en tiempo real"
+        )
 
     def test_filter_curve_uses_a_right_axis_in_db_gain(self):
         right_axis = self.window.output_plot.getAxis("right")

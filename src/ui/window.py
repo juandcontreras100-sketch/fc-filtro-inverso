@@ -10,7 +10,7 @@ from __future__ import annotations
 import csv
 import queue
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 import pyqtgraph as pg
@@ -45,9 +45,18 @@ BAND_BAR_WIDTH = 0.8  # ancho de las barras de 1/3 de octava, en indices de band
 class MainWindow(QtWidgets.QMainWindow):
     """Interfaz grafica completa del ecualizador."""
 
-    def __init__(self, engine: AudioEngine, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self,
+        engine: AudioEngine,
+        parent: QtWidgets.QWidget | None = None,
+        *,
+        user: Any = None,
+        devices: Mapping[str, str | None] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.engine = engine
+        self.user = user
+        self.devices = dict(devices or {})
         self._filter_revision = -1
         self._filter_db = np.zeros(0)
         self._frequencies = np.zeros(0)
@@ -68,7 +77,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._spectrum_style = "linea"
         self._band_centers = np.zeros(0)
 
-        self.setWindowTitle("Ecualizador FFT en tiempo real")
+        title = "Ecualizador FFT en tiempo real"
+        if user is not None:
+            title = f"{title} - {user.name}"
+        self.setWindowTitle(title)
         self.resize(1_360, 960)
         theme.apply_theme(self)
 

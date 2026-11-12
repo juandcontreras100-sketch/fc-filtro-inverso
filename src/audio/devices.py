@@ -16,6 +16,8 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 DEFAULT_LABEL = "Sistema (entrada y salida por defecto)"
+DEFAULT_INPUT_LABEL = "Entrada por defecto del sistema"
+DEFAULT_OUTPUT_LABEL = "Salida por defecto del sistema"
 
 # Orden de preferencia: WASAPI y MME toleran bien los cambios de formato.
 _HOST_API_ORDER = ("WASAPI", "MME", "DIRECTSOUND", "ASIO")
@@ -152,6 +154,177 @@ def build_device_options(
 
     options.sort(key=lambda option: (option[2], option[3]))
     return [(None, DEFAULT_LABEL)] + [(value, label) for value, label, _rank, _i in options]
+
+
+def _device_host_name(
+    devices: Sequence[Mapping[str, Any]],
+    hostapis: Sequence[Mapping[str, Any]],
+    index: int,
+) -> str:
+    return str(hostapis[int(devices[index]["hostapi"])]["name"])
+
+
+def _is_offered(
+    devices: Sequence[Mapping[str, Any]],
+    hostapis: Sequence[Mapping[str, Any]],
+    index: int,
+) -> bool:
+    upper = _device_host_name(devices, hostapis, index).upper()
+    return not any(token in upper for token in _EXCLUDED_HOST_APIS)
+
+
+def _device_option(
+    devices: Sequence[Mapping[str, Any]],
+    hostapis: Sequence[Mapping[str, Any]],
+    index: int,
+) -> tuple[int, str, int, int]:
+    api = _device_host_name(devices, hostapis, index)
+    label = f"{index}: {devices[index]['name']} ({api})"
+    return index, label, _api_rank(api), index
+
+
+def _valid_index(devices: Sequence[Mapping[str, Any]], index: Any) -> bool:
+    return isinstance(index, int) and 0 <= index < len(devices)
+
+
+def build_input_options(
+    devices: Sequence[Mapping[str, Any]],
+    hostapis: Sequence[Mapping[str, Any]],
+) -> list[tuple[Any, str]]:
+    """Opciones de microfono: solo dispositivos con canales de entrada.
+
+    Entrada y salida deben vivir en la misma API para abrir un unico
+    ``sd.Stream``; la salida se filtra con ``build_output_options``.
+    """
+    options = [
+        _device_option(devices, hostapis, index)
+        for index, device in enumerate(devices)
+        if _is_offered(devices, hostapis, index)
+        and int(device["max_input_channels"]) > 0
+    ]
+    options.sort(key=lambda option: (option[2], option[3]))
+    return [(None, DEFAULT_INPUT_LABEL)] + [
+        (value, label) for value, label, _rank, _index in options
+    ]
+
+
+def build_output_options(
+    devices: Sequence[Mapping[str, Any]],
+    hostapis: Sequence[Mapping[str, Any]],
+    input_index: int | None,
+) -> list[tuple[Any, str]]:
+    """Opciones de altavoz limitadas a la API del microfono elegido."""
+    allowed_api = None
+    if _valid_index(devices, input_index):
+        allowed_api = int(devices[input_index]["hostapi"])
+
+    options = []
+    for index, device in enumerate(devices):
+        if not _is_offered(devices, hostapis, index):
+            continue
+        if int(device["max_output_channels"]) <= 0:
+            continue
+        if allowed_api is not None and int(device["hostapi"]) != allowed_api:
+            continue
+        options.append(_device_option(devices, hostapis, index))
+    options.sort(key=lambda option: (option[2], option[3]))
+    return [(None, DEFAULT_OUTPUT_LABEL)] + [
+        (value, label) for value, label, _rank, _index in options
+    ]
+
+
+def device_name(
+    devices: Sequence[Mapping[str, Any]],
+    index: Any,
+) -> str | None:
+    """Nombre estable de un dispositivo: nunca devuelve indices al perfil."""
+    if index is None:
+        return None
+    if isinstance(index, str):
+        return index
+    if not _valid_index(devices, index):
+        return None
+    return str(devices[index]["name"])
+
+
+def find_device_by_name(
+    devices: Sequence[Mapping[str, Any]],
+    name: str | None,
+) -> int | None:
+    """Busca un dispositivo por nombre para sobrevivir a cambios de indice."""
+    if not name:
+        return None
+    target = str(name).strip().casefold()
+    for index, device in enumerate(devices):
+        if str(device["name"]).strip().casefold() == target:
+            return index
+    return None
+
+
+def _host_api_default(
+    devices: Sequence[Mapping[str, Any]],
+    hostapis: Sequence[Mapping[str, Any]],
+    api_index: int,
+    key: str,
+    *,
+    needs_input: bool = False,
+    needs_output: bool = False,
+) -> int | None:
+    """Devuelve el dispositivo por defecto de una API si sirve para ese rol."""
+    try:
+        default = int(hostapis[api_index].get(key, -1))
+    except (IndexError, TypeError, ValueError):
+        return None
+    if not _valid_index(devices, default) or not _is_offered(devices, hostapis, default):
+        return None
+    device = devices[default]
+    if needs_input and int(device["max_input_channels"]) <= 0:
+        return None
+    if needs_output and int(device["max_output_channels"]) <= 0:
+        return None
+    return default
+
+
+def device_pair(
+    input_index: int | None,
+    output_index: int | None,
+    devices: Sequence[Mapping[str, Any]],
+    hostapis: Sequence[Mapping[str, Any]],
+) -> tuple[int | None, int | None] | None:
+    """Construye el ``device`` de ``sd.Stream`` manteniendo la misma API.
+
+    Si un lado queda en "por defecto del sistema", se resuelve al dispositivo
+    por defecto de la API del otro lado. Asi el par nunca cruza MME/WASAPI.
+    """
+    input_valid = _valid_index(devices, input_index)
+    output_valid = _valid_index(devices, output_index)
+    if not input_valid and not output_valid:
+        return None
+    if input_valid and output_valid:
+        return (input_index, output_index)
+    if input_valid:
+        api_index = int(devices[input_index]["hostapi"])
+        return (
+            input_index,
+            _host_api_default(
+                devices,
+                hostapis,
+                api_index,
+                "default_output_device",
+                needs_output=True,
+            ),
+        )
+    api_index = int(devices[output_index]["hostapi"])
+    return (
+        _host_api_default(
+            devices,
+            hostapis,
+            api_index,
+            "default_input_device",
+            needs_input=True,
+        ),
+        output_index,
+    )
 
 
 def available_devices() -> list[tuple[Any, str]]:

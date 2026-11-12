@@ -2,13 +2,22 @@
 
 import unittest
 
-from src.audio.devices import build_device_options, combine_device_arg, parse_device
+from src.audio.devices import (
+    build_device_options,
+    build_input_options,
+    build_output_options,
+    combine_device_arg,
+    device_name,
+    device_pair,
+    find_device_by_name,
+    parse_device,
+)
 
 HOSTAPIS = [
-    {"name": "MME"},
-    {"name": "Windows DirectSound"},
-    {"name": "Windows WASAPI"},
-    {"name": "Windows WDM-KS"},
+    {"name": "MME", "default_input_device": 0, "default_output_device": 1},
+    {"name": "Windows DirectSound", "default_input_device": -1, "default_output_device": -1},
+    {"name": "Windows WASAPI", "default_input_device": 2, "default_output_device": 3},
+    {"name": "Windows WDM-KS", "default_input_device": -1, "default_output_device": -1},
 ]
 
 
@@ -164,6 +173,87 @@ class ArgumentParsingTests(unittest.TestCase):
     def test_device_and_pair_arguments_are_mutually_exclusive(self):
         with self.assertRaises(ValueError):
             combine_device_arg("3", "6", "7")
+
+
+class InputOutputOptionsTests(unittest.TestCase):
+    def test_input_options_start_with_the_system_default(self):
+        options = build_input_options(LAPTOP, HOSTAPIS)
+
+        self.assertIsNone(options[0][0])
+        self.assertIn("por defecto del sistema", options[0][1])
+
+    def test_input_options_only_list_devices_with_input_channels(self):
+        options = build_input_options(LAPTOP, HOSTAPIS)
+        values = _values(options)
+
+        self.assertIn(0, values)
+        self.assertIn(2, values)
+        self.assertNotIn(1, values)
+        self.assertNotIn(3, values)
+
+    def test_input_options_keep_wasapi_before_mme(self):
+        options = build_input_options(LAPTOP, HOSTAPIS)
+        values = _values(options)
+
+        self.assertLess(values.index(2), values.index(0))
+
+    def test_output_options_are_filtered_to_the_input_host_api(self):
+        mme_outputs = _values(build_output_options(LAPTOP, HOSTAPIS, 0))
+        wasapi_outputs = _values(build_output_options(LAPTOP, HOSTAPIS, 2))
+
+        self.assertEqual(mme_outputs, [None, 1])
+        self.assertEqual(wasapi_outputs, [None, 3])
+
+    def test_output_options_without_an_input_list_every_api(self):
+        values = _values(build_output_options(LAPTOP, HOSTAPIS, None))
+
+        self.assertIn(1, values)
+        self.assertIn(3, values)
+
+    def test_output_options_exclude_wdm_ks(self):
+        devices = LAPTOP + [
+            _dev("Input (QCAUD Wave Speaker)", 3, 2, 0),
+            _dev("Output (QCAUD Wave Speaker)", 3, 0, 2),
+        ]
+
+        self.assertEqual(_values(build_output_options(devices, HOSTAPIS, 6)), [None])
+
+    def test_output_options_start_with_the_system_default(self):
+        options = build_output_options(LAPTOP, HOSTAPIS, 2)
+
+        self.assertIsNone(options[0][0])
+        self.assertIn("por defecto del sistema", options[0][1])
+
+    def test_a_pair_uses_the_selected_indices(self):
+        self.assertEqual(device_pair(0, 3, LAPTOP, HOSTAPIS), (0, 3))
+
+    def test_a_default_output_is_resolved_inside_the_input_host_api(self):
+        self.assertEqual(device_pair(0, None, LAPTOP, HOSTAPIS), (0, 1))
+        self.assertEqual(device_pair(2, None, LAPTOP, HOSTAPIS), (2, 3))
+
+    def test_a_default_input_is_resolved_inside_the_output_host_api(self):
+        self.assertEqual(device_pair(None, 3, LAPTOP, HOSTAPIS), (2, 3))
+
+    def test_without_an_api_default_the_other_side_stays_on_the_system_default(self):
+        self.assertEqual(device_pair(4, None, LAPTOP, HOSTAPIS), (4, None))
+        self.assertEqual(device_pair(None, 5, LAPTOP, HOSTAPIS), (None, 5))
+
+    def test_both_defaults_mean_a_none_device(self):
+        self.assertIsNone(device_pair(None, None, LAPTOP, HOSTAPIS))
+
+    def test_device_name_resolves_indices_names_and_defaults(self):
+        self.assertIsNone(device_name(LAPTOP, None))
+        self.assertEqual(device_name(LAPTOP, 3), LAPTOP[3]["name"])
+        self.assertEqual(device_name(LAPTOP, "Mi tarjeta"), "Mi tarjeta")
+        self.assertIsNone(device_name(LAPTOP, 99))
+
+    def test_find_device_by_name_is_case_insensitive_and_tolerates_changes(self):
+        name = LAPTOP[3]["name"]
+
+        self.assertEqual(find_device_by_name(LAPTOP, name), 3)
+        self.assertEqual(find_device_by_name(LAPTOP, name.lower()), 3)
+        self.assertIsNone(find_device_by_name(LAPTOP, "No existe"))
+        self.assertIsNone(find_device_by_name(LAPTOP, None))
 
 
 if __name__ == "__main__":
