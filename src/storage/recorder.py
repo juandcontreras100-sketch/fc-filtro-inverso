@@ -70,9 +70,16 @@ class SessionRecorder:
         root_dir: str | Path = "sesiones",
         *,
         clock: Callable[[], float] = time.monotonic,
+        user: Any = None,
+        devices: dict[str, Any] | None = None,
     ) -> None:
         self.engine = engine
+        # Con usuario, todas sus grabaciones se acumulan en una sola carpeta.
         self.root_dir = Path(root_dir)
+        if user is not None:
+            self.root_dir = self.root_dir / user.folder_name
+        self._user = user
+        self._devices = devices
         self._clock = clock
 
         self._directory: Path | None = None
@@ -213,7 +220,13 @@ class SessionRecorder:
     def _metadata(self) -> dict[str, Any]:
         """Estado del motor que identifica la sesion."""
         calibration = self.engine.calibration_path
+        extra: dict[str, Any] = {}
+        if self._user is not None:
+            extra["usuario"] = self._user.as_dict()
+        if self._devices:
+            extra["dispositivos"] = self._devices
         return {
+            **extra,
             "sample_rate": float(self.engine.sample_rate),
             "fft_size": int(self.engine.fft_size),
             "device": _json_device(self.engine.device),

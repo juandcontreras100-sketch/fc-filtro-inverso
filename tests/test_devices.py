@@ -168,3 +168,49 @@ class ArgumentParsingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SessionDeviceChoiceTest(unittest.TestCase):
+    DEVICES = LAPTOP + ESP32
+
+    def test_input_options_start_with_system_default_and_only_inputs(self):
+        from src.audio.devices import build_input_options
+
+        options = build_input_options(self.DEVICES, HOSTAPIS)
+        self.assertIsNone(options[0][0])
+        indexes = [value for value, _label in options[1:]]
+        for index in indexes:
+            self.assertGreater(self.DEVICES[index]["max_input_channels"], 0)
+
+    def test_output_options_follow_host_api_of_the_microphone(self):
+        from src.audio.devices import build_output_options
+
+        # El microfono 0 es MME (hostapi 0): ninguna salida WASAPI debe aparecer.
+        options = build_output_options(self.DEVICES, HOSTAPIS, input_index=0)
+        for value, _label in options[1:]:
+            self.assertEqual(self.DEVICES[value]["hostapi"], 0)
+        self.assertIn(1, [v for v, _l in options])
+
+    def test_output_options_without_microphone_list_every_api(self):
+        from src.audio.devices import build_output_options
+
+        apis = {
+            self.DEVICES[v]["hostapi"]
+            for v, _l in build_output_options(self.DEVICES, HOSTAPIS)[1:]
+        }
+        self.assertGreater(len(apis), 1)
+
+    def test_device_pair(self):
+        from src.audio.devices import device_pair
+
+        self.assertIsNone(device_pair(None, None))
+        self.assertEqual(device_pair(0, 1), (0, 1))
+        self.assertEqual(device_pair(None, 3), (None, 3))
+
+    def test_find_device_by_name_survives_index_changes(self):
+        from src.audio.devices import device_name, find_device_by_name
+
+        name = device_name(self.DEVICES, 7)
+        self.assertEqual(find_device_by_name(self.DEVICES, name, want_input=False), 7)
+        self.assertIsNone(find_device_by_name(self.DEVICES, name, want_input=True))
+        self.assertIsNone(find_device_by_name(self.DEVICES, "no existe", want_input=True))

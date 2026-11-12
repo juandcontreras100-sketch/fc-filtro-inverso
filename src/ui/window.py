@@ -129,6 +129,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.graphics = pg.GraphicsLayoutWidget()
         self.graphics.setBackground(theme.BACKGROUND)
+        # Sin holguras extra: las graficas ocupan todo el contenedor.
+        self.graphics.ci.layout.setContentsMargins(2, 2, 2, 2)
+        self.graphics.ci.layout.setSpacing(2)
         graphs_layout.addWidget(self.graphics)
 
         self.input_plot = self.graphics.addPlot(title="Entrada: senal captada")
@@ -145,6 +148,9 @@ class MainWindow(QtWidgets.QMainWindow):
             name="Entrada",
         )
         self.input_plot.addLegend(offset=(12, 12), labelTextColor=theme.MUTED)
+        # Eje derecho vacio: reserva el mismo ancho que el de la salida para que
+        # los tres titulos queden centrados sobre el mismo recuadro.
+        theme.reserve_right_axis(self.input_plot)
 
         self.graphics.nextRow()
 
@@ -187,36 +193,39 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_filter_view_geometry()
 
         self.graphics.nextRow()
-        self.filter_plot = self.graphics.addPlot(title="Respuesta del filtro")
-        theme.style_plot(self.filter_plot, "Respuesta del filtro")
-        self.filter_plot.setLabel("left", "Ganancia", units="dB")
-        self.filter_plot.setLabel("bottom", "Frecuencia", units="Hz")
-        self.filter_plot.setLogMode(x=True, y=False)
-        self.filter_plot.setXLink(self.input_plot)
-        self.filter_plot.showGrid(x=True, y=True, alpha=0.22)
-        self.filter_plot.setYRange(-6.0, 6.0, padding=0)
-        self.filter_plot.addItem(
-            pg.InfiniteLine(
-                pos=0.0,
-                angle=0,
-                movable=False,
-                pen=pg.mkPen(theme.PANEL_EDGE, width=1, style=QtCore.Qt.DotLine),
-            )
+        self.compare_plot = self.graphics.addPlot(
+            title="Comparacion: sin ecualizar vs ecualizada"
         )
-        self.filter_plot.addLegend(offset=(12, 12), labelTextColor=theme.MUTED)
-        self.h_measured_curve = self.filter_plot.plot(
-            pen=pg.mkPen(theme.INPUT, width=1.5), name="|H| medida"
+        theme.style_plot(self.compare_plot, "Comparacion: sin ecualizar vs ecualizada")
+        self.compare_plot.setLogMode(x=True, y=False)
+        self.compare_plot.setLabel("left", "Magnitud", units="dBFS")
+        self.compare_plot.setLabel("bottom", "Frecuencia", units="Hz")
+        self.compare_plot.setXLink(self.input_plot)
+        self.compare_plot.showGrid(x=True, y=True, alpha=0.22)
+        self.compare_plot.setYRange(DB_FLOOR, DB_CEILING, padding=0)
+        self.compare_plot.addLegend(offset=(12, 12), labelTextColor=theme.MUTED)
+        self.compare_input_curve = self.compare_plot.plot(
+            pen=pg.mkPen(theme.INPUT, width=1.6), name="Sin ecualizar (entrada)"
         )
-        self.h_inverse_curve = self.filter_plot.plot(
-            pen=pg.mkPen(theme.FILTER, width=1.5), name="|H inversa|"
+        self.compare_output_curve = self.compare_plot.plot(
+            pen=pg.mkPen(theme.OUTPUT, width=1.6), name="Ecualizada (salida)"
         )
-        self.h_product_curve = self.filter_plot.plot(
-            pen=pg.mkPen(theme.OUTPUT, width=1.6), name="|H x H inversa|"
+        theme.reserve_right_axis(self.compare_plot)
+
+        # Cursor sincronizado en las tres graficas, con el dB de cada curva.
+        self.readout = CursorReadout(
+            [self.input_plot, self.output_plot, self.compare_plot],
+            log_x=True,
+            series=[
+                (0, "entrada", theme.INPUT),
+                (1, "salida", theme.OUTPUT),
+                (2, "_entrada_dbfs", theme.INPUT),
+                (2, "salida", theme.OUTPUT),
+            ],
         )
 
-        self.readout = CursorReadout(
-            [self.input_plot, self.output_plot, self.filter_plot], log_x=True
-        )
+        for plot in (self.input_plot, self.output_plot, self.compare_plot):
+            theme.fit_plot(plot)
 
         row.addWidget(graphs)
         row.setStretchFactor(0, 0)
@@ -273,11 +282,15 @@ class MainWindow(QtWidgets.QMainWindow):
             self.engine.seconds_per_row,
         )
         upper = min(20_000.0, self.engine.nyquist)
-        lower = 20.0 if upper > 20.0 else max(upper * 0.5, 1e-3)
+        # El primer bin sin DC es el primer punto dibujado: empezar el eje ahi
+        # (si cae por encima de 20 Hz) evita un hueco vacio junto al eje Y.
+        first_bin = float(self._frequencies[1])
+        lower = max(20.0, first_bin) if upper > 20.0 else max(upper * 0.5, 1e-3)
+        lower = min(lower, upper * 0.5)
         # En modo log el ViewBox trabaja con log10(Hz), tambien en setLimits.
         x_min, x_max = np.log10(lower), np.log10(upper)
         limits = {
-            "xMin": np.log10(20.0),
+            "xMin": x_min,
             "xMax": np.log10(self.engine.nyquist),
             "yMin": DB_FLOOR,
             "yMax": DB_CEILING,
@@ -288,7 +301,8 @@ class MainWindow(QtWidgets.QMainWindow):
             plot.setXRange(x_min, x_max, padding=0)
         self._update_input_level_axis()
         # Su eje X esta enlazado a la entrada: arrastrarlo tambien la moveria.
-        self.filter_plot.setMouseEnabled(x=False, y=False)
+        self.compare_plot.setMouseEnabled(x=False, y=False)
+        self.compare_plot.setLimits(yMin=DB_FLOOR, yMax=DB_CEILING)
         self._update_filter_curve()
 
     def _update_filter_view_geometry(self) -> None:
@@ -323,14 +337,23 @@ class MainWindow(QtWidgets.QMainWindow):
             input_unit = "dB SPL"
         if input_values.size == self._frequencies.size:
             self.input_curve.setData(self._frequencies[1:], input_values[1:])
+        # La comparacion siempre va en dBFS: ambas curvas con la misma escala.
+        if self._input_db.size == self._frequencies.size:
+            self.compare_input_curve.setData(self._frequencies[1:], self._input_db[1:])
         self.readout.set_spectra(
             self._frequencies,
             {
                 "entrada": input_values,
                 "salida": self._output_db,
                 "filtro": self._filter_db,
+                "_entrada_dbfs": self._input_db,
             },
-            units={"entrada": input_unit, "salida": "dBFS", "filtro": "dB"},
+            units={
+                "entrada": input_unit,
+                "salida": "dBFS",
+                "filtro": "dB",
+                "_entrada_dbfs": "dBFS",
+            },
         )
 
     def _update_total_level_label(self) -> None:
@@ -514,6 +537,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         # El bin 0 (DC) no existe en un eje logaritmico: log10(0) seria NaN.
         self.output_curve.setData(self._frequencies[1:], self._output_db[1:])
+        self.compare_output_curve.setData(self._frequencies[1:], self._output_db[1:])
         self._update_filter_curve()
         self.spectrogram.push(self._output_db)
 
@@ -561,7 +585,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.filter_view.setYRange(lower, upper, padding=0)
 
     def _update_response_curves(self) -> None:
-        """Dibuja |H| medida, |H^-1| aplicada y su producto en dB."""
+        """Calcula |H| medida, |H^-1| aplicada y su producto en dB (para el CSV)."""
         h_inverse = self.engine.equalizer.h_inverse
         self._filter_db = gain_db(h_inverse)
         inverse_db = self._filter_db
@@ -577,19 +601,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._measured_db = measured_db
         self._inverse_db = inverse_db
         self._product_db = product_db
-
-        frequencies = self._frequencies
-        self.h_measured_curve.setData(frequencies[1:], measured_db[1:])
-        self.h_inverse_curve.setData(frequencies[1:], inverse_db[1:])
-        self.h_product_curve.setData(frequencies[1:], product_db[1:])
-
-        values = np.concatenate((measured_db[1:], inverse_db[1:], product_db[1:]))
-        if values.size:
-            self.filter_plot.setYRange(
-                min(-1.0, float(np.min(values)) - 3.0),
-                max(1.0, float(np.max(values)) + 3.0),
-                padding=0,
-            )
 
     # --------------------------------------------------------------- sesion
     def _on_record_toggled(self, recording: bool) -> None:

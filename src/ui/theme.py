@@ -58,6 +58,32 @@ def style_plot(plot: pg.PlotItem, title: str | None = None) -> None:
             axis.setTextPen(text_pen)
 
 
+# Ancho fijo de los ejes laterales: con el mismo ancho a izquierda y derecha, el
+# recuadro de cada grafica mide lo mismo y sus titulos quedan alineados.
+AXIS_WIDTH = 66
+
+
+def reserve_right_axis(plot: pg.PlotItem) -> None:
+    """Muestra un eje derecho sin marcas ni numeros, solo para reservar su ancho."""
+    plot.showAxis("right")
+    axis = plot.getAxis("right")
+    axis.setStyle(showValues=False, tickLength=0)
+    axis.setPen(pg.mkPen(PANEL_EDGE, width=1))
+
+
+def fit_plot(plot: pg.PlotItem) -> None:
+    """Quita holguras: ejes de ancho fijo, sin relleno interno ni margenes."""
+    for name in ("left", "right"):
+        axis = plot.getAxis(name)
+        if axis is not None and axis.isVisible():
+            axis.setWidth(AXIS_WIDTH)
+    view = plot.getViewBox()
+    if hasattr(view, "setDefaultPadding"):
+        view.setDefaultPadding(0.0)
+    plot.layout.setContentsMargins(0, 0, 0, 0)
+    plot.layout.setSpacing(0)
+
+
 def status_badge_style(state: str) -> str:
     """Estilo tipo pastilla (badge) segun el estado operativo del filtro."""
     palette: dict[str, tuple[str, str, str]] = {
@@ -89,8 +115,8 @@ def stylesheet() -> str:
         background-color: {PANEL};
         border: 1px solid {PANEL_EDGE};
         border-radius: 6px;
-        margin-top: 8px;
-        padding: 8px 6px 6px 6px;
+        margin-top: 16px;
+        padding: 14px 6px 6px 6px;
         font-weight: 600;
     }}
     QGroupBox::title {{

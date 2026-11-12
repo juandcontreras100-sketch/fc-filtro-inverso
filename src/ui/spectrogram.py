@@ -39,6 +39,8 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
         self.plot.setLabel("left", "Tiempo hacia atras", units="s")
         self.plot.setMouseEnabled(x=False, y=False)
         self.plot.addItem(self._image)
+        self.ci.layout.setContentsMargins(2, 2, 2, 2)
+        theme.fit_plot(self.plot)
 
         self._colorbar = self.plot.addColorBar(
             self._image,
