@@ -15,6 +15,7 @@ from PySide6 import QtCore, QtWidgets
 
 from src.audio.engine import AudioEngine, SpectrumFrame
 from src.storage.recorder import SessionRecorder
+from src.ui import theme
 from src.ui import window as window_module
 from src.ui.controls import ControlPanel
 from src.ui.readout import CursorReadout
@@ -271,12 +272,12 @@ class MainWindowSpectrumStyleTests(unittest.TestCase):
         self.window.controls.spectrum_combo.setCurrentIndex(1)
 
         self.assertEqual(self.window._spectrum_style, "barras")
-        self.assertTrue(self.window.input_curve.isHidden())
-        self.assertTrue(self.window.output_curve.isHidden())
-        self.assertTrue(self.window.filter_curve.isHidden())
-        self.assertFalse(self.window.input_bars.isHidden())
-        self.assertFalse(self.window.output_bars.isHidden())
-        self.assertFalse(self.window.filter_band_curve.isHidden())
+        self.assertFalse(self.window.input_curve.isVisible())
+        self.assertFalse(self.window.output_curve.isVisible())
+        self.assertFalse(self.window.filter_curve.isVisible())
+        self.assertTrue(self.window.input_bars.isVisible())
+        self.assertTrue(self.window.output_bars.isVisible())
+        self.assertTrue(self.window.filter_band_curve.isVisible())
 
         band_count = self.window.input_bars.opts["x"].size
         self.assertGreater(band_count, 0)
@@ -292,20 +293,22 @@ class MainWindowSpectrumStyleTests(unittest.TestCase):
         self.assertEqual(len(ticks[0]), band_count)
         self.assertEqual(ticks[0][0], (0.0, "100"))
 
-        # El cursor lee la frecuencia central de la banda.
-        self.assertIsNotNone(self.window.readout._labels)
-        self.assertEqual(self.window.readout._labels.size, band_count)
+        # El cursor se desactiva en modo barras: el aviso lo indica.
+        self.assertTrue(
+            all(not line.isVisible() for line in self.window.readout._lines)
+        )
+        self.assertIn("modo Linea", self.window.readout_label.text())
 
     def test_line_mode_restores_the_log_axis(self):
         self.window.controls.spectrum_combo.setCurrentIndex(1)
         self.window.controls.spectrum_combo.setCurrentIndex(0)
 
-        self.assertFalse(self.window.input_curve.isHidden())
-        self.assertFalse(self.window.output_curve.isHidden())
-        self.assertFalse(self.window.filter_curve.isHidden())
-        self.assertTrue(self.window.input_bars.isHidden())
-        self.assertTrue(self.window.output_bars.isHidden())
-        self.assertTrue(self.window.filter_band_curve.isHidden())
+        self.assertTrue(self.window.input_curve.isVisible())
+        self.assertTrue(self.window.output_curve.isVisible())
+        self.assertTrue(self.window.filter_curve.isVisible())
+        self.assertFalse(self.window.input_bars.isVisible())
+        self.assertFalse(self.window.output_bars.isVisible())
+        self.assertFalse(self.window.filter_band_curve.isVisible())
 
         self.assertTrue(self.window.input_plot.ctrl.logXCheck.isChecked())
         self.assertIsNone(self.window.input_plot.getAxis("bottom")._tickLevels)
@@ -330,16 +333,6 @@ class _FakePlot:
         return _FakeViewBox()
 
 
-class _BandFakeViewBox(_FakeViewBox):
-    def mapSceneToView(self, _position):
-        return QtCore.QPointF(1.0, 0.0)
-
-
-class _BandFakePlot(_FakePlot):
-    def getViewBox(self):
-        return _BandFakeViewBox()
-
-
 class CursorReadoutLogTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -358,19 +351,142 @@ class CursorReadoutLogTests(unittest.TestCase):
         self.assertIn("1.000 Hz", text)
         self.assertIn("entrada -20.0 dB", text)
 
-    def test_band_cursor_reports_the_center_frequency(self):
-        readout = CursorReadout([_BandFakePlot()])
-        readout.set_spectra(
-            np.array([0.0, 1.0, 2.0]),
-            {"entrada": np.array([-10.0, -20.0, -30.0])},
-            labels=np.array([800.0, 1_000.0, 1_250.0]),
+
+class CursorReadoutWindowTests(unittest.TestCase):
+    """Cursor compartido, marcadores y etiquetas en las tres graficas."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = pg.mkQApp("test-cursor-ventana")
+
+    def setUp(self):
+        self.engine = AudioEngine(sample_rate=48_000.0, fft_size=512)
+        self.window = MainWindow(self.engine)
+        self.window.show()
+        self.window.resize(1_200, 800)
+        self.app.processEvents()
+        self._feed_frame()
+
+    def tearDown(self):
+        self.window.close()
+
+    def _feed_frame(self) -> None:
+        hop_size = self.engine.hop_size
+        fft_size = self.engine.fft_size
+        self.engine.display_queue.put(
+            SpectrumFrame(
+                input_samples=np.full(hop_size, 0.1),
+                output_samples=np.full(hop_size, 0.05),
+                would_clip=False,
+                input_window=np.full(fft_size, 0.1),
+                output_window=np.full(fft_size, 0.05),
+            )
+        )
+        self.window._refresh()
+        self.app.processEvents()
+
+    def _scene_position(self, plot, frequency: float, y: float = -40.0):
+        return plot.getViewBox().mapViewToScene(
+            QtCore.QPointF(np.log10(frequency), y)
         )
 
-        text = readout.handle_mouse(QtCore.QPointF(50.0, 50.0))
+    def _curve(self, plot, name: str):
+        return next(
+            curve
+            for curve in self.window.readout._curves
+            if curve.plot is plot and curve.name == name
+        )
+
+    def test_mouse_move_places_the_cursor_in_every_plot(self):
+        scene_position = self._scene_position(self.window.input_plot, 1_000.0)
+
+        text = self.window.readout.handle_mouse(scene_position)
 
         self.assertIsNotNone(text)
-        self.assertIn("1.000 Hz", text)
-        self.assertIn("entrada -20.0 dB", text)
+        self.assertEqual(len(self.window.readout._lines), 3)
+        for line in self.window.readout._lines:
+            self.assertTrue(line.isVisible())
+            self.assertAlmostEqual(line.value(), np.log10(1_000.0), places=5)
+
+    def test_each_curve_gets_a_marker_and_a_label_with_its_own_color(self):
+        scene_position = self._scene_position(self.window.input_plot, 1_000.0)
+
+        self.window.readout.handle_mouse(scene_position)
+
+        frequencies = self.window._frequencies
+        expected_input = np.interp(1_000.0, frequencies, self.window._input_db)
+        expected_output = np.interp(1_000.0, frequencies, self.window._output_db)
+
+        input_curve = self._curve(self.window.input_plot, "entrada")
+        output_curve = self._curve(self.window.output_plot, "salida")
+        filter_curve = self._curve(self.window.filter_plot, "filtro")
+
+        for curve in (input_curve, output_curve, filter_curve):
+            self.assertTrue(curve.marker.isVisible())
+            self.assertTrue(curve.label.isVisible())
+
+        _x, y_values = input_curve.marker.getData()
+        self.assertAlmostEqual(float(y_values[0]), expected_input, places=5)
+        self.assertEqual(
+            input_curve.label.toPlainText(),
+            f"{expected_input:+.1f} dBFS",
+        )
+
+        _x, y_values = output_curve.marker.getData()
+        self.assertAlmostEqual(float(y_values[0]), expected_output, places=5)
+        self.assertEqual(
+            output_curve.label.toPlainText(),
+            f"{expected_output:+.1f} dBFS",
+        )
+        self.assertEqual(input_curve.color, theme.INPUT)
+        self.assertEqual(output_curve.color, theme.OUTPUT)
+        self.assertEqual(filter_curve.color, theme.FILTER)
+
+    def test_label_flips_to_the_right_half_of_the_plot(self):
+        curve = self._curve(self.window.input_plot, "entrada")
+
+        self.window.readout.handle_mouse(
+            self._scene_position(self.window.input_plot, 100.0)
+        )
+        left_anchor = curve.label.anchor.x()
+        left_x = curve.label.pos().x()
+
+        self.window.readout.handle_mouse(
+            self._scene_position(self.window.input_plot, 15_000.0)
+        )
+        right_anchor = curve.label.anchor.x()
+        right_x = curve.label.pos().x()
+
+        self.assertEqual(left_anchor, 1.0)
+        self.assertEqual(right_anchor, 0.0)
+        self.assertLess(left_x, np.log10(100.0))
+        self.assertGreater(right_x, np.log10(15_000.0))
+
+    def test_input_label_uses_spl_when_spl_display_is_active(self):
+        self.engine.spl_offset_db = 120.0
+        self.window.controls.spl_checkbox.setChecked(True)
+        self.window._update_input_display()
+
+        # En SPL el eje Y arranca en 0 dB SPL, no en -120 dBFS.
+        self.window.readout.handle_mouse(
+            self._scene_position(self.window.input_plot, 1_000.0, y=60.0)
+        )
+
+        input_curve = self._curve(self.window.input_plot, "entrada")
+        self.assertTrue(input_curve.label.toPlainText().endswith("dB SPL"))
+
+    def test_leaving_the_graphics_hides_lines_markers_and_labels(self):
+        self.window.readout.handle_mouse(
+            self._scene_position(self.window.input_plot, 1_000.0)
+        )
+
+        self.window.readout.handle_mouse(QtCore.QPointF(-10_000.0, -10_000.0))
+
+        for line in self.window.readout._lines:
+            self.assertFalse(line.isVisible())
+        for curve in self.window.readout._curves:
+            self.assertFalse(curve.marker.isVisible())
+            self.assertFalse(curve.label.isVisible())
 
 
 class ControlPanelSessionTests(unittest.TestCase):

@@ -25,6 +25,7 @@ from src.dsp.spectrum import (
     gain_db,
     level_db,
     spectrum_db,
+    third_octave_bands,
     total_level_db,
 )
 from src.storage.recorder import SessionRecorder
@@ -38,6 +39,7 @@ from src.ui.spl_context import spl_context_text, spl_zone_color
 from src.ui.spl_persistence import input_device_name, save_spl_calibration
 
 REFRESH_MS = 33  # ~30 FPS
+BAND_BAR_WIDTH = 0.8  # ancho de las barras de 1/3 de octava, en indices de banda
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -62,6 +64,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._output_history = np.zeros(engine.fft_size)
         # Peso del espectro anterior en el promedio exponencial de la GUI.
         self.spectrum_averaging = 0.8
+        # Vista del espectro: "linea" (curvas) o "barras" (1/3 de octava).
+        self._spectrum_style = "linea"
+        self._band_centers = np.zeros(0)
 
         self.setWindowTitle("Ecualizador FFT en tiempo real")
         self.resize(1_360, 960)
@@ -130,10 +135,12 @@ class MainWindow(QtWidgets.QMainWindow):
             f"background-color: {theme.PANEL}; color: {theme.TEXT}; "
             f"border: 1px solid {theme.PANEL_EDGE}; border-radius: 5px; padding: 5px 10px;"
         )
+        self._readout_hint = self.readout_label.text()
         graphs_layout.addWidget(self.readout_label)
 
         self.graphics = pg.GraphicsLayoutWidget()
         self.graphics.setBackground(theme.BACKGROUND)
+        self.graphics.viewport().installEventFilter(self)
         graphs_layout.addWidget(self.graphics)
 
         self.input_plot = self.graphics.addPlot(title="Entrada: senal captada")
@@ -150,6 +157,14 @@ class MainWindow(QtWidgets.QMainWindow):
             name="Entrada",
         )
         self.input_plot.addLegend(offset=(12, 12), labelTextColor=theme.MUTED)
+        self.input_bars = pg.BarGraphItem(
+            x=np.zeros(0),
+            y1=np.zeros(0),
+            width=BAND_BAR_WIDTH,
+            brush=pg.mkBrush(theme.INPUT),
+        )
+        self.input_plot.addItem(self.input_bars)
+        self.input_bars.hide()
 
         self.graphics.nextRow()
 
@@ -185,11 +200,24 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.filter_curve.setLogMode(True, False)
         self.filter_view.addItem(self.filter_curve)
+        self.filter_band_curve = pg.PlotDataItem(
+            pen=pg.mkPen(theme.FILTER, width=1.2, style=QtCore.Qt.DashLine)
+        )
+        self.filter_band_curve.hide()
+        self.filter_view.addItem(self.filter_band_curve)
         output_legend = self.output_plot.addLegend(
             offset=(12, 12), labelTextColor=theme.MUTED
         )
         output_legend.addItem(self.filter_curve, "Filtro inverso")
         self._update_filter_view_geometry()
+        self.output_bars = pg.BarGraphItem(
+            x=np.zeros(0),
+            y1=np.zeros(0),
+            width=BAND_BAR_WIDTH,
+            brush=pg.mkBrush(theme.OUTPUT),
+        )
+        self.output_plot.addItem(self.output_bars)
+        self.output_bars.hide()
 
         self.graphics.nextRow()
         self.filter_plot = self.graphics.addPlot(title="Respuesta del filtro")
@@ -220,7 +248,20 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
         self.readout = CursorReadout(
-            [self.input_plot, self.output_plot, self.filter_plot], log_x=True
+            [self.input_plot, self.output_plot, self.filter_plot],
+            log_x=True,
+            curves=[
+                [{"name": "entrada", "color": theme.INPUT}],
+                [
+                    {"name": "salida", "color": theme.OUTPUT},
+                    {
+                        "name": "filtro",
+                        "color": theme.FILTER,
+                        "view": self.filter_view,
+                    },
+                ],
+                [{"name": "filtro", "color": theme.FILTER}],
+            ],
         )
 
         row.addWidget(graphs)
@@ -250,6 +291,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._on_spl_calibration_requested
         )
         self.controls.weightingChanged.connect(self._on_weighting_changed)
+        self.controls.spectrumStyleChanged.connect(self._on_spectrum_style_changed)
         self.graphics.scene().sigMouseMoved.connect(self._on_mouse_moved)
 
     def _sync_from_engine(self) -> None:
@@ -281,6 +323,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.engine.nyquist,
             self.engine.seconds_per_row,
         )
+        if self._spectrum_style == "barras":
+            # El eje X usa indices de banda: se rehace el agrupado por bandas.
+            self.filter_plot.setMouseEnabled(x=False, y=False)
+            self._update_filter_curve()
+            self._update_input_display()
+            self._apply_band_axis()
+            return
         upper = min(20_000.0, self.engine.nyquist)
         lower = 20.0 if upper > 20.0 else max(upper * 0.5, 1e-3)
         # En modo log el ViewBox trabaja con log10(Hz), tambien en setLimits.
@@ -324,6 +373,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.input_curve.setFillLevel(lower)
 
     def _update_input_display(self) -> None:
+        if self._spectrum_style == "barras":
+            self._update_band_display()
+            return
         input_values = self._input_db
         input_unit = "dBFS"
         offset = self._active_spl_offset()
@@ -341,6 +393,124 @@ class MainWindow(QtWidgets.QMainWindow):
             },
             units={"entrada": input_unit, "salida": "dBFS", "filtro": "dB"},
         )
+
+    # ------------------------------------------------------ vista del espectro
+    def _on_spectrum_style_changed(self, style: str) -> None:
+        self._spectrum_style = style
+        self._apply_spectrum_style()
+
+    def _apply_spectrum_style(self) -> None:
+        """Alterna la presentacion de entrada y salida entre linea y barras."""
+        if self._spectrum_style == "barras":
+            self.input_curve.setVisible(False)
+            self.output_curve.setVisible(False)
+            self.filter_curve.setVisible(False)
+            self.input_bars.setVisible(True)
+            self.output_bars.setVisible(True)
+            self.filter_band_curve.setVisible(True)
+            self.readout.hide()
+            self.readout_label.setText(
+                "Vista de barras 1/3 oct: el cursor solo lee valores en modo Linea."
+            )
+            # El eje del filtro estaba enlazado a la entrada, que ahora usa indices.
+            self.filter_plot.setXLink(None)
+            self.filter_view.setLogMode("x", False)
+            for plot in (self.input_plot, self.output_plot):
+                plot.setLogMode(x=False, y=False)
+            self._update_filter_curve()
+            self._update_input_display()
+            self._apply_band_axis()
+            return
+        self.input_curve.setVisible(True)
+        self.output_curve.setVisible(True)
+        self.filter_curve.setVisible(True)
+        self.input_bars.setVisible(False)
+        self.output_bars.setVisible(False)
+        self.filter_band_curve.setVisible(False)
+        self.readout_label.setText(self._readout_hint)
+        self.filter_view.setLogMode("x", True)
+        for plot in (self.input_plot, self.output_plot):
+            plot.setLogMode(x=True, y=False)
+            plot.getAxis("bottom").setTicks(None)
+        self.filter_plot.setXLink(self.input_plot)
+        upper = min(20_000.0, self.engine.nyquist)
+        lower = 20.0 if upper > 20.0 else max(upper * 0.5, 1e-3)
+        # En modo log el ViewBox trabaja con log10(Hz), tambien en setLimits.
+        x_min, x_max = np.log10(lower), np.log10(upper)
+        limits = {
+            "xMin": np.log10(20.0),
+            "xMax": np.log10(self.engine.nyquist),
+            "yMin": DB_FLOOR,
+            "yMax": DB_CEILING,
+        }
+        for plot in (self.input_plot, self.output_plot):
+            plot.setMouseEnabled(x=False, y=False)
+            plot.setLimits(**limits)
+            plot.setXRange(x_min, x_max, padding=0)
+        self._update_input_level_axis()
+        self._update_filter_curve()
+        self._update_input_display()
+
+    def _apply_band_axis(self) -> None:
+        """Fija el eje X de entrada y salida en el indice de banda."""
+        band_max = float(max(self._band_centers.size - 1, 1))
+        for plot in (self.input_plot, self.output_plot):
+            plot.setMouseEnabled(x=False, y=False)
+            plot.setLimits(
+                xMin=-1.0, xMax=band_max + 1.0, yMin=DB_FLOOR, yMax=DB_CEILING
+            )
+            plot.setXRange(-0.5, band_max + 0.5, padding=0)
+        self._update_input_level_axis()
+
+    def _update_band_display(self) -> None:
+        """Agrupa los espectros por bandas de 1/3 de octava y dibuja las barras."""
+        if (
+            self._frequencies.size == 0
+            or self._input_db.size != self._frequencies.size
+            or self._output_db.size != self._frequencies.size
+            or self._filter_db.size != self._frequencies.size
+        ):
+            self._clear_band_display()
+            return
+        input_values = self._input_db
+        offset = self._active_spl_offset()
+        if offset is not None:
+            input_values = dbfs_to_spl(input_values, offset)
+        centers, input_levels = third_octave_bands(input_values, self._frequencies)
+        _centers, output_levels = third_octave_bands(
+            self._output_db, self._frequencies
+        )
+        _centers, filter_levels = third_octave_bands(
+            self._filter_db, self._frequencies
+        )
+        indices = np.arange(centers.size, dtype=np.float64)
+        self.input_bars.setOpts(x=indices, y0=DB_FLOOR, y1=input_levels)
+        self.output_bars.setOpts(x=indices, y0=DB_FLOOR, y1=output_levels)
+        self.filter_band_curve.setData(indices, filter_levels)
+        if filter_levels.size:
+            lower = min(DB_FLOOR, float(np.min(filter_levels)) - 3.0)
+            upper = max(6.0, float(np.max(filter_levels)) + 3.0)
+            self.filter_view.setYRange(lower, upper, padding=0)
+        if not np.array_equal(centers, self._band_centers):
+            self._band_centers = centers
+            ticks = [
+                (float(index), f"{center:,.10g}".replace(",", "."))
+                for index, center in enumerate(centers)
+            ]
+            for plot in (self.input_plot, self.output_plot):
+                plot.getAxis("bottom").setTicks([ticks])
+            # Las bandas cambian con Nyquist: reajusta el eje de indices.
+            self._apply_band_axis()
+
+    def _clear_band_display(self) -> None:
+        """Vacia las barras mientras el espectro no tiene el tamano actual."""
+        empty = np.zeros(0)
+        self._band_centers = empty
+        self.input_bars.setOpts(x=empty, y1=empty)
+        self.output_bars.setOpts(x=empty, y1=empty)
+        self.filter_band_curve.setData(empty, empty)
+        for plot in (self.input_plot, self.output_plot):
+            plot.getAxis("bottom").setTicks([[]])
 
     def _update_total_level_label(self) -> None:
         if not self._has_input_total:
@@ -612,6 +782,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._filter_revision != self.engine.revision:
             self._filter_revision = self.engine.revision
             self._update_response_curves()
+        if self._spectrum_style == "barras":
+            # La linea del filtro por bandas se dibuja en _update_band_display.
+            return
         if self._filter_db.size == self._frequencies.size:
             self.filter_curve.setData(self._frequencies[1:], self._filter_db[1:])
             lower = min(DB_FLOOR, float(np.min(self._filter_db)) - 3.0)
@@ -729,9 +902,25 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
 
     def _on_mouse_moved(self, position: QtCore.QPointF) -> None:
+        if self._spectrum_style == "barras":
+            # La lectura por bandas no esta disponible: ver _apply_spectrum_style.
+            return
         text = self.readout.handle_mouse(position)
         if text:
             self.readout_label.setText(text)
+
+    def eventFilter(self, watched: Any, event: Any) -> bool:  # noqa: N802 (Qt)
+        """Oculta el cursor cuando el raton sale del area de graficas."""
+        graphics = getattr(self, "graphics", None)
+        readout = getattr(self, "readout", None)
+        if (
+            graphics is not None
+            and readout is not None
+            and watched is graphics.viewport()
+            and event.type() == QtCore.QEvent.Type.Leave
+        ):
+            readout.hide()
+        return super().eventFilter(watched, event)
 
     def _set_status(self, text: str) -> None:
         self.statusBar().showMessage(text)
